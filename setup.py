@@ -1,5 +1,5 @@
 """
-One-time setup for the texthooker.
+One-time setup for Down the Rabbit Hole (the texthooker).
 
   1. Downloads the kuromoji.js tokenizer + its dictionary into static/kuromoji/.
   2. Downloads JMdict (the standard free Japanese->English dictionary) and builds
@@ -153,8 +153,9 @@ def _entry_freq(kanji, kana, common, wf):
 
 
 def _display_freq(kanji, kana, common, wf):
-    """Overall commonness for the rarity badge — max over ALL spellings, so words
-    usually written in kana (する) aren't judged rare by their rare kanji (為る)."""
+    """Overall commonness (max over ALL spellings, so words usually written in kana
+    (する) aren't judged rare by their rare kanji (為る)). Stored as `df`; currently
+    unused by the ranking — kept for possible future use."""
     score = max((wf.get(t, 0.0) for t in (kanji + kana)), default=0.0)
     d = int(round(score * 1e8))
     if d == 0 and common:
@@ -218,6 +219,38 @@ def _load_vn_freq(zip_path):
     return freq
 
 
+# Curated high-frequency grammatical set phrases that JMdict does *not* ship as
+# headwords, so the tokenizer would otherwise leave them split into their pieces.
+# Each is marked common so the longest-match scan trusts it (like について / という).
+# IDs live in a private 90,000,000+ range so they never collide with JMdict/JMnedict.
+_EXPRESSIONS = [
+    # (kanji[], kana[], gloss[])
+    (["に違いない"],   ["にちがいない"],     ["there is no doubt that", "surely", "must be"]),
+    ([],               ["にちがいありません"], ["(polite) there is no doubt that", "surely", "must be"]),
+    (["ものではない"], ["ものではない"],     ["one should not ...", "it is not the sort of thing one ..."]),
+    (["様がない"],     ["ようがない"],       ["there is no way to ...", "cannot possibly ..."]),
+    (["に他ならない"], ["にほかならない"],   ["nothing but ...", "none other than ..."]),
+    (["を始め"],       ["をはじめ"],         ["starting with ...", "including", "among others"]),
+    (["よりほかない"], ["よりほかない"],     ["have no choice but to ...", "cannot help but ..."]),
+    (["より仕方ない"], ["よりしかたない"],   ["cannot be helped", "there is no choice but to ..."]),
+]
+_EXPR_ID_BASE = 90_000_001
+
+
+def add_expression_supplement(cur):
+    """Insert the curated set-phrase supplement (idempotent — safe to re-run)."""
+    cur.execute("DELETE FROM entries WHERE id >= ?", (_EXPR_ID_BASE,))
+    cur.execute("DELETE FROM terms   WHERE id >= ?", (_EXPR_ID_BASE,))
+    for i, (kanji, kana, gloss) in enumerate(_EXPRESSIONS):
+        eid = _EXPR_ID_BASE + i
+        rec = {"id": str(eid), "k": kanji, "r": kana, "c": True, "f": 800,
+               "s": [{"pos": ["exp"], "gloss": gloss, "misc": []}]}
+        cur.execute("INSERT INTO entries VALUES (?,?,?)",
+                    (eid, 800, json.dumps(rec, ensure_ascii=False)))
+        for t in kanji + kana:
+            cur.execute("INSERT INTO terms VALUES (?,?)", (t, eid))
+
+
 def build_db(jmdict_json_bytes, vn_freq=None):
     print("  parsing JMdict (this takes a moment)...")
     data = json.loads(jmdict_json_bytes)
@@ -269,9 +302,7 @@ def build_db(jmdict_json_bytes, vn_freq=None):
         if vn_freq is not None:
             kr = [vn_freq[t] for t in kanji if t in vn_freq] or \
                  [vn_freq[t] for t in kana if t in vn_freq]
-            allr = [vn_freq[t] for t in (kanji + kana) if t in vn_freq]
-            rec["vr"] = min(kr) if kr else None     # ranking (kanji-preferred)
-            rec["vrd"] = min(allr) if allr else None  # rarity + display (any spelling)
+            rec["vr"] = min(kr) if kr else None     # VN rank, kanji-preferred (drives ranking)
         entries.append((eid, freq, json.dumps(rec, ensure_ascii=False)))
         seen = set()
         for t in kanji + kana:
@@ -289,6 +320,8 @@ def build_db(jmdict_json_bytes, vn_freq=None):
         cur.executemany("INSERT INTO entries VALUES (?,?,?)", entries)
     if terms:
         cur.executemany("INSERT INTO terms VALUES (?,?)", terms)
+
+    add_expression_supplement(cur)   # curated set phrases JMdict lacks as headwords
 
     print("  building index...")
     cur.execute("CREATE INDEX idx_terms ON terms(term)")
@@ -409,7 +442,11 @@ def setup_names(force=False):
 
 # --------------------------------------------------------------------------- #
 def main():
-    ap = argparse.ArgumentParser(description="Texthooker setup / dictionary builder")
+    try:
+        sys.stdout.reconfigure(errors="replace")   # never crash printing to a non-UTF-8 console
+    except Exception:
+        pass
+    ap = argparse.ArgumentParser(description="Down the Rabbit Hole - setup / dictionary builder")
     ap.add_argument("--common", action="store_true",
                     help="use the smaller common-words-only JMdict edition")
     ap.add_argument("--force", action="store_true", help="redownload / rebuild everything")
@@ -417,13 +454,13 @@ def main():
     ap.add_argument("--no-names", action="store_true", help="skip the JMnedict names dictionary")
     ap.add_argument("--freq", metavar="ZIP",
                     help="path to a Yomitan frequency dictionary .zip (e.g. the Visual "
-                         "Novel list from jiten.moe) to drive ranking + rarity tiers")
+                         "Novel list from jiten.moe) to drive lookup ranking")
     ap.add_argument("--innocent", action="store_true",
                     help="auto-download the Innocent Corpus VN/novel frequency list "
                          "(no manual step, but coarser than the jiten.moe VN list)")
     args = ap.parse_args()
 
-    print("Texthooker setup\n================")
+    print("Down the Rabbit Hole - setup\n" + "=" * 28)
     if not args.skip_kuromoji:
         setup_kuromoji(force=args.force)
     setup_dictionary(common=args.common, force=args.force, freq_zip=args.freq,

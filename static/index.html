@@ -3,23 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VN Texthooker</title>
+<title>Down the Rabbit Hole</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/settings.js"></script>
 </head>
 <body>
 <header id="toolbar">
-  <span class="brand">VN&nbsp;Texthooker</span>
+  <span class="brand">🐇&nbsp;Down&nbsp;the&nbsp;Rabbit&nbsp;Hole</span>
   <span id="status" class="status connecting" title="connection status">connecting…</span>
   <span class="spacer"></span>
   <button id="pauseBtn" title="Pause / resume clipboard capture">⏸ Pause</button>
   <button id="furiBtn" title="Toggle furigana readings">あ Furigana</button>
+  <button id="setBtn" title="Appearance: theme, colours, font">⚙ Theme</button>
   <label class="fontctl">A
     <input id="fontRange" type="range" min="16" max="56" value="30">
   </label>
-  <button id="clearBtn" title="Remove the most recent line">⌫ Undo</button>
+  <button id="clearBtn" title="Undo — remove the most recent line">⌫</button>
   <button id="clearAllBtn" class="icon-btn" title="Clear all lines">🗑</button>
   <span id="dictStatus" class="dict-status" title="tokenizer status">loading tokenizer…</span>
 </header>
+
+<aside id="settings" class="settings hidden" aria-label="Appearance settings">
+  <div class="set-head"><b>Appearance</b><button id="setClose" class="set-x" title="close">×</button></div>
+  <div class="set-label">Theme</div>
+  <div id="presetRow" class="presets"></div>
+  <div class="set-label">Colours</div>
+  <div id="colorRow" class="colors"></div>
+  <div class="set-label">Font (use the A slider for size)</div>
+  <select id="fontSelect"></select>
+  <button id="setReset" class="set-reset">Reset to default</button>
+</aside>
 
 <main id="lines"></main>
 

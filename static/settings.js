@@ -1,0 +1,178 @@
+/* Appearance settings: theme presets, custom colours, font, text size. ----- *
+ * Loaded in <head> (blocking) so the saved theme is applied before first paint
+ * — no flash. The panel UI is wired up on DOMContentLoaded. Everything persists
+ * to localStorage; fonts are system/offline stacks so nothing is fetched.        */
+(function () {
+  "use strict";
+
+  // A theme = these 6 core colours. Every other shade is derived in CSS via
+  // color-mix(), so a preset only needs the palette below. Each is a Wonderland
+  // character; listed alphabetically (which also puts the default, Alice, first).
+  const PRESETS = {
+    "Alice":           { "--bg": "#eef4fb", "--text": "#213243", "--accent": "#3f6fc0", "--accent-2": "#a9762a", "--pos": "#2f7d4a", "--danger": "#c0392b" }, // her blue dress, white pinafore (light)
+    "Caterpillar":     { "--bg": "#0d1626", "--text": "#e4e9f3", "--accent": "#5f93de", "--accent-2": "#d98aa8", "--pos": "#82cf93", "--danger": "#e36673" }, // blue hookah smoke, mushroom pink
+    "Cheshire":        { "--bg": "#181026", "--text": "#efe6f6", "--accent": "#e84d9c", "--accent-2": "#a982ef", "--pos": "#5fded0", "--danger": "#ff5d7a" }, // magenta stripes, teal grin in the dark
+    "Mad Hatter":      { "--bg": "#0f211f", "--text": "#eef1e7", "--accent": "#34c1af", "--accent-2": "#ec9540", "--pos": "#c39be6", "--danger": "#e85f72" }, // teal hat, tea-orange, whimsy purple
+    "Queen of Hearts": { "--bg": "#18090c", "--text": "#f4e9e8", "--accent": "#d8243c", "--accent-2": "#e6b84e", "--pos": "#5fae7a", "--danger": "#ff5a52" }, // crimson & royal gold on black
+    "White Rabbit":    { "--bg": "#f7f3e8", "--text": "#38322a", "--accent": "#a87f24", "--accent-2": "#c1556f", "--pos": "#5f8742", "--danger": "#b8392b" }, // cream coat, watch gold, pink eyes (light)
+  };
+  const CORE_VARS = ["--bg", "--text", "--accent", "--accent-2", "--pos", "--danger"];
+  // colours exposed as pickers (label -> css var). --furigana has no preset value
+  // (it's derived from the theme in CSS); the picker just lets you override it.
+  const PICKERS = [
+    ["Background", "--bg"], ["Text", "--text"], ["Accent", "--accent"],
+    ["Reading", "--accent-2"], ["Tag", "--pos"], ["Furigana", "--furigana"],
+  ];
+  const FONTS = {
+    "Default (Sans)": '"Segoe UI", system-ui, sans-serif',
+    "Gothic (JP)":    '"Yu Gothic", "YuGothic", "Meiryo", "Noto Sans JP", sans-serif',
+    "Mincho (Serif)": '"Yu Mincho", "YuMincho", "Hiragino Mincho ProN", "MS Mincho", "Noto Serif JP", serif',
+    "Rounded":        '"Yu Gothic UI", "BIZ UDPGothic", "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", sans-serif',
+    "Monospace":      '"Cascadia Code", "Consolas", "MS Gothic", monospace',
+  };
+  const DEFAULTS = { preset: "Alice", colors: {}, font: "Default (Sans)", fontSize: 30 };
+  const LS_KEY = "vntex-appearance";
+
+  function load() {
+    let s;
+    try { s = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(LS_KEY)) || {}); }
+    catch (_) { s = Object.assign({}, DEFAULTS); }
+    if (!PRESETS[s.preset]) s.preset = DEFAULTS.preset;   // retired preset name -> default
+    return s;
+  }
+  function save(s) {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch (_) {}
+  }
+
+  // Resolve a CSS colour var (e.g. a color-mix derived value) to a #rrggbb hex,
+  // so it can seed an <input type=color> (which only accepts hex).
+  function resolveHex(varName) {
+    const probe = document.createElement("span");
+    probe.style.cssText = "display:none;color:var(" + varName + ")";
+    document.body.appendChild(probe);
+    const c = getComputedStyle(probe).color;     // "rgb(...)" or "color(srgb ...)"
+    probe.remove();
+    const hex = (a) => "#" + a.map(n => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0")).join("");
+    let m = c.match(/rgba?\(([\d.\s,]+)\)/);
+    if (m) return hex(m[1].split(",").slice(0, 3).map(parseFloat));
+    m = c.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/);
+    if (m) return hex([m[1], m[2], m[3]].map(x => parseFloat(x) * 255));
+    return "#888888";
+  }
+
+  // Apply a settings object to <html> — runs before paint, and on every change.
+  function apply(s) {
+    const root = document.documentElement.style;
+    const preset = PRESETS[s.preset] || PRESETS["Alice"];
+    CORE_VARS.forEach(v => root.setProperty(v, preset[v]));
+    root.removeProperty("--furigana");                 // default: derived from the theme in CSS
+    if (s.colors) for (const v in s.colors) root.setProperty(v, s.colors[v]);  // custom overrides
+    root.setProperty("--font-family", FONTS[s.font] || FONTS["Default (Sans)"]);
+    root.setProperty("--font-size", (s.fontSize || 30) + "px");
+  }
+
+  let settings = load();
+  apply(settings);   // <-- pre-paint, no flash
+
+  // --- panel UI (needs the DOM) --------------------------------------------
+  function init() {
+    const panel = document.getElementById("settings");
+    const openBtn = document.getElementById("setBtn");
+    if (!panel || !openBtn) return;
+
+    const presetRow = panel.querySelector("#presetRow");
+    const colorsBox = panel.querySelector("#colorRow");
+    const fontSel = panel.querySelector("#fontSelect");
+    const sizeRange = document.getElementById("fontRange");   // existing toolbar slider
+
+    // presets (each chip shows an accent swatch)
+    Object.keys(PRESETS).forEach(name => {
+      const chip = document.createElement("button");
+      chip.className = "preset";
+      chip.dataset.preset = name;
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.background = PRESETS[name]["--accent"];
+      sw.style.borderColor = PRESETS[name]["--text"];
+      chip.append(sw, document.createTextNode(name));
+      chip.addEventListener("click", () => {
+        settings.preset = name;
+        settings.colors = {};          // a fresh preset clears custom colours
+        commit();
+      });
+      presetRow.appendChild(chip);
+    });
+
+    // colour pickers
+    const colorInputs = {};
+    PICKERS.forEach(([label, varName]) => {
+      const wrap = document.createElement("label");
+      const span = document.createElement("span");
+      span.textContent = label;
+      const inp = document.createElement("input");
+      inp.type = "color";
+      inp.dataset.var = varName;
+      inp.addEventListener("input", () => {
+        settings.colors = Object.assign({}, settings.colors, { [varName]: inp.value });
+        commit();
+      });
+      colorInputs[varName] = inp;
+      wrap.append(span, inp);
+      colorsBox.appendChild(wrap);
+    });
+
+    // fonts
+    Object.keys(FONTS).forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name; opt.textContent = name;
+      fontSel.appendChild(opt);
+    });
+    fontSel.addEventListener("change", () => { settings.font = fontSel.value; commit(); });
+
+    // text-size slider (re-used from the toolbar)
+    if (sizeRange) {
+      sizeRange.addEventListener("input", () => {
+        settings.fontSize = +sizeRange.value;
+        document.documentElement.style.setProperty("--font-size", sizeRange.value + "px");
+        save(settings);
+      });
+    }
+
+    // reset
+    panel.querySelector("#setReset").addEventListener("click", () => {
+      settings = Object.assign({}, DEFAULTS, { colors: {} });
+      commit();
+    });
+
+    // open / close
+    const toggle = (show) => panel.classList.toggle("hidden", show === undefined ? !panel.classList.contains("hidden") : !show);
+    openBtn.addEventListener("click", (e) => { e.stopPropagation(); toggle(); syncControls(); });
+    panel.querySelector("#setClose").addEventListener("click", () => toggle(false));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggle(false); });
+    document.addEventListener("click", (e) => {
+      if (!panel.classList.contains("hidden") && !panel.contains(e.target) && e.target !== openBtn)
+        toggle(false);
+    });
+
+    // Reflect current settings back into the controls.
+    function syncControls() {
+      const cs = getComputedStyle(document.documentElement);
+      presetRow.querySelectorAll(".preset").forEach(c =>
+        c.classList.toggle("active", c.dataset.preset === settings.preset && !Object.keys(settings.colors).length));
+      PICKERS.forEach(([, v]) => {
+        let val = (cs.getPropertyValue(v) || "").trim();
+        if (!/^#[0-9a-f]{6}$/i.test(val)) val = resolveHex(v);   // derived (furigana) -> resolve to hex
+        colorInputs[v].value = val;
+      });
+      fontSel.value = settings.font;
+      if (sizeRange) sizeRange.value = settings.fontSize;
+    }
+
+    function commit() { apply(settings); save(settings); syncControls(); }
+
+    syncControls();   // initialise control state from saved settings
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();

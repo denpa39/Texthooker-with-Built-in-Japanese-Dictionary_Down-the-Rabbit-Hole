@@ -1,5 +1,6 @@
 """
-Texthooker server: watches the Windows clipboard for new (game) text, streams it
+Down the Rabbit Hole — texthooker server: watches the Windows clipboard for new
+(game) text, streams it
 to the browser over Server-Sent Events, and serves offline JMdict lookups.
 
 Pure standard library. Run `python setup.py` once first to build dict.sqlite and
@@ -159,12 +160,15 @@ def to_hiragana(s):
 # kuromoji part-of-speech (品詞) -> JMdict partOfSpeech tags, used to surface the
 # right homograph (は the particle, not 羽 "feather"; た the auxiliary, not 多).
 _POS_MAP = {
-    "助詞": {"prt"},
+    # 'exp' (set expression) is added to the grammatical roles a phrase can fill, so
+    # a multi-word expression earns the POS tiebreak when the tokenizer tagged the
+    # token as a particle/conjunction/adverb/adnominal (様に over the rare 陽に).
+    "助詞": {"prt", "exp"},
     "助動詞": {"aux", "aux-v", "aux-adj", "cop", "cop-da"},
     "形容詞": {"adj-i", "adj-ix"},
-    "副詞": {"adv", "adv-to"},
-    "連体詞": {"adj-pn"},
-    "接続詞": {"conj"},
+    "副詞": {"adv", "adv-to", "exp"},
+    "連体詞": {"adj-pn", "exp"},
+    "接続詞": {"conj", "exp"},
     "感動詞": {"int"},
     "接頭詞": {"pref"},
     "名詞": {"n", "pn", "n-suf", "n-pref", "n-t"},
@@ -204,9 +208,12 @@ def _fetch_entries(term):
     if h != term:
         cands.append(h)
     for cand in cands:
+        # LIMIT must exceed the largest homograph cluster (こう has 51) so a common
+        # word with poor frequency attribution (斯う「こう」, stored freq 1) is never
+        # truncated away — otherwise hovering it would surface only rarer homographs.
         rows = db.execute(
             "SELECT DISTINCT e.id, e.json FROM terms t JOIN entries e ON e.id = t.id "
-            "WHERE t.term = ? ORDER BY e.freq DESC LIMIT 40", (cand,)).fetchall()
+            "WHERE t.term = ? ORDER BY e.freq DESC LIMIT 80", (cand,)).fetchall()
         for eid, js in rows:
             if eid not in seen:
                 seen.add(eid)
@@ -222,54 +229,132 @@ def _fetch_names(term):
     try:
         rows = db.execute(
             "SELECT DISTINCT n.id, n.json FROM nameterms t JOIN names n ON n.id = t.id "
-            "WHERE t.term = ? LIMIT 8", (term,)).fetchall()
+            "WHERE t.term = ? ORDER BY n.id LIMIT 8", (term,)).fetchall()
     except sqlite3.OperationalError:
         return []
     return [json.loads(js) for _id, js in rows]
 
 
-def _rank_key(e, pos, reading_h, pref):
-    # grammatical role, then reading, then frequency: は the particle (not 羽),
-    # 本【ほん】"book" (not 本【もと】), 居る "to be" (not 射る "to shoot").
+# --------------------------------------------------------------------------- #
+# Ranking
+#
+# One sort key decides every lookup. The guiding idea is "longest *plausible*
+# match, anchored on the tokenizer's own segmentation": kuromoji already analysed
+# the sentence and told us this token's dictionary form, part-of-speech and
+# reading, so we trust that and only let a *longer* match win when it is itself a
+# known, common word. That single rule dissolves two whole bug classes —
+# rare over-extensions (hover そこ -> 底荷「そこに」"ballast") and names burying a
+# real word (hover 村 -> the surnames むらさき/たくみ) — without any rarity tiers.
+# --------------------------------------------------------------------------- #
+# A longer match is only trusted to out-rank the tokenizer's own word if it is
+# itself *common*. The VN frequency list has 100k+ entries, so mere membership means
+# nothing (底荷「そこに」"ballast" sits at rank 105,228); we require a word near the top
+# of the VN list. ~6,600 keeps real compounds the tokenizer splits (一日中 #6249,
+# について #557, 縫いぐるみ #6506, 絡まる #6504) trusted, while capping rarer
+# over-extensions — the nearest over-match trap (好奇) sits at #13,450, leaving a clean
+# gap. Empirically near-minimises the over-match audit without dropping a genuine compound.
+_VN_COMMON_RANK = 6600
+
+
+def _established(e):
+    """A known, frequently-used word: flagged common in JMdict, or near the top of
+    the VN frequency list. Only established words keep their length when they extend
+    *past* the tokenizer's segment (一日中, という); a rare longer over-match
+    (底荷「そこに」) does not, so it cannot bury the short word the tokenizer found."""
+    if e.get("c"):
+        return True
+    vr = e.get("vr")
+    return isinstance(vr, int) and vr <= _VN_COMMON_RANK
+
+
+def _commonness(e):
+    """A single sortable commonness signal, higher = more common. A JMdict-common word
+    outranks a bare VN rank, because raw VN position can put an obscure homograph above
+    the obvious everyday word (御先「みさき」#2593 vs the common 岬「みさき」). Within a
+    tier, lower VN rank (or higher wordfreq) wins."""
+    vr = e.get("vr")
+    if isinstance(vr, int):
+        return (3 if e.get("c") else 2, -vr)   # common-flagged VN words tier above the rest
+    f = e.get("f") or 0
+    if f:
+        return (1, f)        # general wordfreq signal
+    return (0, 0)            # no signal at all (names, very obscure entries)
+
+
+def _sort_key(c, tok_len, pos, reading_h, pref):
+    """The one ranking key for a candidate (lower sorts first)."""
+    e = c["entry"]
+    is_name = c["kind"] == "name"
     is_verb = pos == "動詞"
     allowed = _POS_MAP.get(pos)
-    pf = 0 if (pref and pref in e.get("k", [])) else 1
-    pm = 0 if (allowed or is_verb) and _pos_match(e, allowed or set(), is_verb) else 1
-    rm = 0 if reading_h and _reading_match(e, reading_h) else 1
-    # VN frequency (jiten.moe): in-list words first, by ascending rank; then wordfreq
-    vr = e.get("vr")
-    vr_flag, vr_rank = (0, vr) if isinstance(vr, int) else (1, 0)
-    return (pf, pm, rm, vr_flag, vr_rank, -e.get("f", 0))
+    pos_ok = bool((allowed or is_verb) and _pos_match(e, allowed or set(), is_verb))
+    read_ok = bool(reading_h and _reading_match(e, reading_h))
+    # The hovered reading is the entry's *primary* (first-listed) reading. A multi-reading
+    # homograph carries a single frequency tied to its dominant reading, so when it matches
+    # only on a secondary reading it must not out-rank the word for which this reading is
+    # primary (追う「おう」 over 合う「あう・おう」, whose frequency is really あう's).
+    primary_read_ok = bool(reading_h and e.get("r") and to_hiragana(e["r"][0]) == reading_h)
+    pref_ok = bool(pref and pref in e.get("k", []))
+
+    # Cap a rare word that matches *past* the tokenizer's segment: it is almost
+    # always an over-extension into the next token (そこ + に). Established longer
+    # words (一日中) and names keep their real length.
+    eff_len = c["len"]
+    if not is_name and c["len"] > tok_len and not _established(e):
+        eff_len = tok_len
+
+    common_lvl, common_mag = _commonness(e)
+    return (
+        -eff_len,                          # 1. longest *plausible* match first
+        1 if is_name else 0,               # 2. a real word beats a same-length name
+        0 if (pos_ok or read_ok) else 1,   # 3. tokenizer-confirmed candidate first
+        0 if pos_ok else 1,                # 4. part-of-speech agreement (其処 pronoun > 底 noun)
+        0 if read_ok else 1,               # 5. reading agreement (any reading)
+        0 if primary_read_ok else 1,       # 6. the hovered reading is the entry's primary one
+        0 if pref_ok else 1,               # 7. known dominant kanji for a kana verb (居る > 射る)
+        len(c["reasons"]),                 # 8. fewer de-inflection steps (exact > inflected)
+        -common_lvl, -common_mag,          # 9. more common (JMdict-common tier > raw VN rank)
+        -c["len"],                         # 10. true length
+        e.get("id", ""),                   # 11. stable final tiebreak -> deterministic order
+    )
 
 
 def lookup(term, pos=None, reading=None):
+    """Rank every entry whose spelling equals `term` (used by the /lookup route)."""
     if not term:
         return []
     reading_h = to_hiragana(reading) if reading else None
     pref = _KANA_PREF.get(term) or _KANA_PREF.get(to_hiragana(term))
-    results = _fetch_entries(term)
-    results.sort(key=lambda e: _rank_key(e, pos, reading_h, pref))
-    return results
+    cands = [{"len": len(term), "reasons": [], "kind": "word", "entry": e}
+             for e in _fetch_entries(term)]
+    cands.sort(key=lambda c: _sort_key(c, len(term), pos, reading_h, pref))
+    return [c["entry"] for c in cands]
 
 
-def scan(text, pos=None, reading=None, base=None):
-    """Longest-match scan from the start of `text`: returns ranked candidate
-    matches (words via de-inflection + names), longest match first."""
-    text = (text or "").replace("\n", "")[:24]
+def scan(text, pos=None, reading=None, base=None, surface=None):
+    """Longest-match scan from the start of `text`, returning ranked candidates
+    (words via de-inflection + names). `surface` is the tokenizer's surface form of
+    the hovered token; its length anchors the over-extension cap in _sort_key."""
+    text = (text or "").replace("\n", "")[:32]
     if not text:
         return []
     reading_h = to_hiragana(reading) if reading else None
     pref = _KANA_PREF.get(base or "") or _KANA_PREF.get(to_hiragana(base or ""))
+    tok_len = len(surface or base or "") or 1
 
     cands, seen = [], set()
     for end in range(len(text), 0, -1):
         prefix = text[:end]
         for form, reasons in deinflect.deinflect(prefix).items():
+            # deinflect() lists reasons outermost-first (the order rules peeled off);
+            # reverse so the displayed trail reads stem-outward, the way a learner
+            # derives it: 食べる › causative › passive › past (not past › passive › …).
+            trail = list(reversed(reasons))
             for e in _fetch_entries(form):
                 key = ("w", e["id"])
                 if key not in seen:
                     seen.add(key)
-                    cands.append({"len": end, "matched": prefix, "reasons": reasons,
+                    cands.append({"len": end, "matched": prefix, "reasons": trail,
                                   "kind": "word", "entry": e})
         for e in _fetch_names(prefix):
             key = ("n", e["id"])
@@ -278,9 +363,9 @@ def scan(text, pos=None, reading=None, base=None):
                 cands.append({"len": end, "matched": prefix, "reasons": [],
                               "kind": "name", "entry": e})
 
-    # Always include the tokenizer's dictionary form as a low-priority safety net —
-    # catches forms the de-inflector can't reach (e.g. bare ichidan stems written in
-    # kanji: 見 -> 見る). Longer real matches still rank above it.
+    # Safety net: the tokenizer's dictionary form, in case the de-inflector can't
+    # reach it (bare ichidan stems written in kanji: 見 -> 見る). Ranked like any
+    # short match — longer real matches still rank above it.
     if base:
         for e in _fetch_entries(base):
             key = ("w", e["id"])
@@ -289,13 +374,18 @@ def scan(text, pos=None, reading=None, base=None):
                 cands.append({"len": 1, "matched": base, "reasons": [],
                               "kind": "word", "entry": e})
 
-    def order(c):
-        rk = _rank_key(c["entry"], pos, reading_h, pref)  # (pf, pm, rm, vr_flag, vr, -freq)
-        # longest match first; then role/reading; then prefer exact over inflected;
-        # then VN frequency / wordfreq.
-        return (-c["len"], rk[0], rk[1], rk[2], len(c["reasons"]), *rk[3:])
+    # Tag the reading that actually matched when it isn't the entry's primary one,
+    # so the popup can show 口【こう】 (hovered こう) instead of the primary 口【くち】.
+    if reading_h:
+        for c in cands:
+            rs = c["entry"].get("r") or []
+            if rs and to_hiragana(rs[0]) != reading_h:
+                for rk in rs:
+                    if to_hiragana(rk) == reading_h:
+                        c["mr"] = rk
+                        break
 
-    cands.sort(key=order)
+    cands.sort(key=lambda c: _sort_key(c, tok_len, pos, reading_h, pref))
     return cands[:12]
 
 
@@ -367,8 +457,9 @@ class Handler(BaseHTTPRequestHandler):
             pos = (qs.get("pos") or [""])[0]
             reading = (qs.get("reading") or [""])[0]
             base = (qs.get("base") or [""])[0]
+            surface = (qs.get("surface") or [""])[0]
             try:
-                self._send_json({"candidates": scan(text, pos, reading, base)})
+                self._send_json({"candidates": scan(text, pos, reading, base, surface)})
             except Exception as e:
                 self._send_json({"candidates": [], "error": str(e)}, 500)
         elif path == "/state":
@@ -430,7 +521,11 @@ class Handler(BaseHTTPRequestHandler):
 
 # --------------------------------------------------------------------------- #
 def main():
-    ap = argparse.ArgumentParser(description="Visual-novel texthooker server")
+    try:
+        sys.stdout.reconfigure(errors="replace")   # never crash printing to a non-UTF-8 console
+    except Exception:
+        pass
+    ap = argparse.ArgumentParser(description="Down the Rabbit Hole - VN texthooker server")
     ap.add_argument("--port", type=int, default=6969)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--no-browser", action="store_true")
@@ -451,7 +546,7 @@ def main():
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}/"
-    print(f"Texthooker running at {url}")
+    print(f"Down the Rabbit Hole - running at {url}")
     print("Clipboard monitoring is ON. Copy Japanese text (or hook a game with "
           "Textractor) and it will appear in the browser.")
     print("Press Ctrl+C to stop.")

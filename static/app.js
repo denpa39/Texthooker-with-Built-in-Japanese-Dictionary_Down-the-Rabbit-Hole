@@ -1,4 +1,4 @@
-/* VN Texthooker front-end ------------------------------------------------ *
+/* Down the Rabbit Hole — front-end --------------------------------------- *
  * - tokenizes incoming Japanese with kuromoji
  * - renders words as hoverable spans (with optional furigana)
  * - fetches offline JMdict definitions from the local server on hover
@@ -33,10 +33,17 @@ const expandPos = p => POS[p] || p;
 const MISC = {
   "uk": "usu. kana", "col": "colloquial", "sl": "slang", "vulg": "vulgar",
   "fam": "familiar", "hon": "honorific", "hum": "humble", "pol": "polite",
-  "arch": "archaic", "obs": "obsolete", "fem": "female term", "male": "male term",
+  "arch": "archaic", "obs": "obsolete", "rare": "rare", "dated": "dated", "hist": "historical",
+  "fem": "female term", "male": "male term", "form": "formal", "euph": "euphemistic",
   "abbr": "abbreviation", "on-mim": "onomatopoeia", "joc": "jocular", "derog": "derogatory",
+  "poet": "poetic", "chn": "children's term", "yoji": "four-character idiom", "proverb": "proverb",
 };
 const expandMisc = m => MISC[m] || m;
+
+/* ---- inflection-trail labels (raw de-inflection tags -> readable) ------- */
+const REASON = { "passive/potential": "passive or potential", "past/-te": "past or -te" };
+const expandReason = r => REASON[r] || r;
+const isDatedSense = s => (s.misc || []).some(m => m === "arch" || m === "obs" || m === "rare");
 
 /* ---- katakana -> hiragana (for furigana) ------------------------------ */
 function toHiragana(s) {
@@ -140,14 +147,15 @@ function addLine(text) {
 /* ---- dictionary lookup + popup (longest-match scan) -------------------- */
 let pinned = false;
 
-async function fetchScan(text, pos, reading, base) {
-  const key = [pos || "", reading || "", base || "", text].join("|");
+async function fetchScan(text, pos, reading, base, surface) {
+  const key = [pos || "", reading || "", base || "", surface || "", text].join("|");
   if (lookupCache.has(key)) return lookupCache.get(key);
   try {
     const r = await fetch("/scan?text=" + encodeURIComponent(text) +
                           "&pos=" + encodeURIComponent(pos || "") +
                           "&reading=" + encodeURIComponent(reading || "") +
-                          "&base=" + encodeURIComponent(base || ""));
+                          "&base=" + encodeURIComponent(base || "") +
+                          "&surface=" + encodeURIComponent(surface || ""));
     const res = (await r.json()).candidates || [];
     lookupCache.set(key, res);
     return res;
@@ -163,24 +171,26 @@ function plainReading(reading) {
   return rd;
 }
 
-// Fortnite-style word rarity (rarer word = higher tier).
-// Prefers the VN frequency rank (jiten.moe) when present, else general frequency.
-function rarity(e) {
-  const rk = e.vrd;                          // VN rank: lower = more common
-  if (rk != null) {
-    if (rk <= 1500)  return ["Common", "r-common", rk];
-    if (rk <= 5000)  return ["Uncommon", "r-uncommon", rk];
-    if (rk <= 15000) return ["Rare", "r-rare", rk];
-    if (rk <= 35000) return ["Epic", "r-epic", rk];
-    return ["Legendary", "r-legendary", rk];
+function renderSense(s, n) {
+  const sense = document.createElement("div");
+  sense.className = "sense";
+  if (s.pos && s.pos.length) {
+    const pos = document.createElement("span");
+    pos.className = "pos";
+    pos.textContent = s.pos.map(expandPos).join(", ");
+    sense.appendChild(pos);
   }
-  const df = (e.df != null) ? e.df : (e.f || 0);
-  if (df >= 30000) return ["Common", "r-common", null];
-  if (df >= 3000)  return ["Uncommon", "r-uncommon", null];
-  if (df >= 250)   return ["Rare", "r-rare", null];
-  if (df >= 15)    return ["Epic", "r-epic", null];
-  if (df >= 1)     return ["Legendary", "r-legendary", null];
-  return ["Mythic", "r-mythic", null];
+  const g = document.createElement("span");
+  g.className = "glosses";
+  const num = document.createElement("span");
+  num.className = "num";
+  num.textContent = n + ".";
+  g.appendChild(num);
+  let txt = s.gloss.join("; ");
+  if (s.misc && s.misc.length) txt = "(" + s.misc.map(expandMisc).join(", ") + ") " + txt;
+  g.appendChild(document.createTextNode(txt));
+  sense.appendChild(g);
+  return sense;
 }
 
 function renderCandidate(c) {
@@ -192,38 +202,39 @@ function renderCandidate(c) {
   if (c.reasons && c.reasons.length) {
     const inf = document.createElement("div");
     inf.className = "inflect";
-    inf.textContent = c.matched + "  ·  " + c.reasons.join(" › ");
+    inf.textContent = c.matched + "  ·  " + c.reasons.map(expandReason).join(" › ");
     div.appendChild(inf);
   }
 
   const head = document.createElement("div");
   head.className = "head";
-  const primary = (entry.k && entry.k[0]) || (entry.r && entry.r[0]) || c.matched;
+  // Headword + reading. When *every* sense is "usually kana", show the kana as the
+  // headword (やはり, not 矢張り). Otherwise show the kanji, with the reading that
+  // actually matched the hover (口【こう】 when hovered こう, not the primary 口【くち】).
+  const senses = entry.s || [];
+  const hasKanji = !!(entry.k && entry.k.length);
+  const allUk = c.kind !== "name" && hasKanji && senses.length &&
+                senses.every(s => (s.misc || []).includes("uk"));
+  const primary = allUk ? entry.r[0]
+                        : ((entry.k && entry.k[0]) || (entry.r && entry.r[0]) || c.matched);
   const hw = document.createElement("span");
   hw.className = "hw";
   hw.textContent = primary;
   head.appendChild(hw);
-  const reading = entry.r && entry.r[0];
-  if (reading && entry.k && entry.k.length) {
-    head.appendChild(plainReading(reading));
+  const readingShown = c.mr || (entry.r && entry.r[0]);
+  if (!allUk && hasKanji && readingShown) {
+    head.appendChild(plainReading(readingShown));
   }
   if (c.kind === "name") {
     const tag = document.createElement("span");
-    tag.className = "name-tag";
+    tag.className = "name-tag";   // pushed right via margin-left:auto
     tag.textContent = "name";
-    head.appendChild(tag);
-  } else {
-    const [label, cls, rk] = rarity(entry);
-    const tag = document.createElement("span");
-    tag.className = "rarity " + cls;
-    tag.textContent = label;
-    tag.title = rk != null ? `VN frequency rank #${rk.toLocaleString()}`
-                           : "word rarity (by general frequency)";
     head.appendChild(tag);
   }
 
   const copy = document.createElement("button");
-  copy.className = "mini";
+  // for words there's no badge, so the copy button carries the right-align push
+  copy.className = "mini" + (c.kind === "name" ? "" : " push");
   copy.textContent = "⧉";
   copy.title = "copy word";
   copy.addEventListener("click", ev => {
@@ -245,8 +256,10 @@ function renderCandidate(c) {
   head.appendChild(jisho);
   div.appendChild(head);
 
-  const alts = [...(entry.k || []).slice(1),
-                ...((entry.k && entry.k.length) ? [] : (entry.r || []).slice(1))];
+  // "also written": for a kana-headword (all-uk) entry surface the kanji form(s).
+  const alts = allUk
+    ? [...(entry.k || []), ...(entry.r || []).slice(1)]
+    : [...(entry.k || []).slice(1), ...(hasKanji ? [] : (entry.r || []).slice(1))];
   if (alts.length) {
     const alt = document.createElement("div");
     alt.className = "alt";
@@ -254,27 +267,24 @@ function renderCandidate(c) {
     div.appendChild(alt);
   }
 
-  (entry.s || []).forEach((s, i) => {
-    const sense = document.createElement("div");
-    sense.className = "sense";
-    if (s.pos && s.pos.length) {
-      const pos = document.createElement("span");
-      pos.className = "pos";
-      pos.textContent = s.pos.map(expandPos).join(", ");
-      sense.appendChild(pos);
-    }
-    const g = document.createElement("span");
-    g.className = "glosses";
-    const num = document.createElement("span");
-    num.className = "num";
-    num.textContent = (i + 1) + ".";
-    g.appendChild(num);
-    let txt = s.gloss.join("; ");
-    if (s.misc && s.misc.length) txt = "(" + s.misc.map(expandMisc).join(", ") + ") " + txt;
-    g.appendChild(document.createTextNode(txt));
-    sense.appendChild(g);
-    div.appendChild(sense);
-  });
+  // Senses. Fold archaic/obsolete/rare senses behind a toggle — but only when a
+  // modern sense remains (a wholly-archaic entry still renders all of its senses).
+  const modern = senses.filter(s => !isDatedSense(s));
+  const dated = senses.filter(isDatedSense);
+  const fold = modern.length > 0 && dated.length > 0;
+  const visible = fold ? modern : senses;
+  visible.forEach((s, i) => div.appendChild(renderSense(s, i + 1)));
+  if (fold) {
+    const more = document.createElement("div");
+    more.className = "fold";
+    more.textContent = `+ ${dated.length} rare / archaic sense${dated.length > 1 ? "s" : ""}`;
+    more.addEventListener("click", ev => {
+      ev.stopPropagation();
+      dated.forEach((s, i) => div.insertBefore(renderSense(s, visible.length + i + 1), more));
+      more.remove();
+    });
+    div.appendChild(more);
+  }
   return div;
 }
 
@@ -283,8 +293,8 @@ async function showScanPopup(target) {
   if (!line) return;
   const off = parseInt(target.dataset.off || "0", 10);
   const text = line.dataset.raw.slice(off);
-  const cands = await fetchScan(text, target.dataset.pos,
-                                target.dataset.jreading, target.dataset.term);
+  const cands = await fetchScan(text, target.dataset.pos, target.dataset.jreading,
+                                target.dataset.term, target.dataset.surface);
 
   popup.innerHTML = "";
   if (pinned) {
@@ -309,18 +319,31 @@ async function showScanPopup(target) {
 
 function positionPopup(target) {
   popup.classList.remove("hidden");
+  popup.style.maxHeight = "";                 // reset before measuring natural height
   const r = target.getBoundingClientRect();
-  const pw = Math.min(popup.offsetWidth || 440, window.innerWidth - 20);
-  let left = r.left;
-  if (left + pw > window.innerWidth - 10) left = window.innerWidth - pw - 10;
-  if (left < 10) left = 10;
+  const gap = 8, margin = 10;
+  const vw = window.innerWidth, vh = window.innerHeight;
 
+  const pw = Math.min(popup.offsetWidth || 440, vw - 2 * margin);
+  const left = Math.min(Math.max(margin, r.left), vw - pw - margin);
+
+  // Place the popup fully below or fully above the word — never overlapping it —
+  // and cap its height to the room on that side (it scrolls if taller). This stops
+  // a tall popup from blanketing the screen and covering the word you're reading.
+  const below = vh - r.bottom - gap - margin;
+  const above = r.top - gap - margin;
   const ph = popup.offsetHeight;
-  let top = r.bottom + 8;
-  if (top + ph > window.innerHeight - 10) top = r.top - ph - 8; // flip above
-  if (top < 10) top = 10;
+  let top, maxH;
+  if (ph <= below || below >= above) {        // below the word
+    top = r.bottom + gap;
+    maxH = below;
+  } else {                                    // above the word (bottom edge above r.top)
+    maxH = above;
+    top = r.top - gap - Math.min(ph, maxH);
+  }
+  popup.style.maxHeight = Math.max(120, maxH) + "px";
   popup.style.left = left + "px";
-  popup.style.top = top + "px";
+  popup.style.top = Math.max(margin, top) + "px";
 }
 
 let hideTimer = null;
@@ -355,6 +378,18 @@ linesEl.addEventListener("click", e => {
 });
 popup.addEventListener("mouseenter", cancelHide);
 popup.addEventListener("mouseleave", scheduleHide);
+
+// The hover popup is pointer-events:none so it never blocks hovering the words
+// beneath it — which also means the wheel can't scroll it natively. So while a
+// peek popup is open, route the wheel to it manually AND keep the page still: the
+// wheel only scrolls the meaning, so the word never slides out from under the
+// cursor mid-read. Move off the word to scroll the page again. (A pinned popup is
+// interactive and scrolls natively, so leave it alone.)
+window.addEventListener("wheel", (e) => {
+  if (pinned || popup.classList.contains("hidden")) return;
+  popup.scrollTop += e.deltaY;
+  e.preventDefault();
+}, { passive: false });
 document.addEventListener("keydown", e => { if (e.key === "Escape") unpin(); });
 document.addEventListener("click", e => {
   if (pinned && !e.target.closest(".token.word") && !e.target.closest("#popup")) unpin();
@@ -424,7 +459,5 @@ document.getElementById("clearAllBtn").addEventListener("click", () => {
   hint.classList.remove("gone");
 });
 
-const fontRange = document.getElementById("fontRange");
-fontRange.addEventListener("input", () => {
-  document.documentElement.style.setProperty("--font-size", fontRange.value + "px");
-});
+// Appearance (theme / colours / font / text size) lives in settings.js, which
+// also wires up the toolbar's #fontRange size slider.

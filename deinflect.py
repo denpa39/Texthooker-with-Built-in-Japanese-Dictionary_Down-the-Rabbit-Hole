@@ -122,6 +122,58 @@ def _build_rules():
     add("ければ", "い", "conditional")
     add("く", "い", "adverbial")
     add("さ", "い", "nominal")
+
+    # ---- literary / casual negative ず・ぬ・ん (行かず, 知らぬ, わからん, 食べん) ----
+    add("ず", "る", "negative")          # ichidan: 食べず -> 食べる
+    add("ぬ", "る", "negative")
+    add("ん", "る", "negative")
+    for a, u in _A.items():
+        add(a + "ず", u, "negative")      # godan: 行かず -> 行く
+        add(a + "ぬ", u, "negative")
+        add(a + "ん", u, "negative")      # わからん, 行かん
+    for irr, base in (("せず", "する"), ("せぬ", "する"), ("せん", "する"),
+                      ("こず", "くる"), ("こぬ", "くる")):
+        add(irr, base, "negative")
+
+    # ---- causative-passive contraction 〜される (godan): 読まされる -> 読む ----
+    for a, u in _A.items():
+        add(a + "される", u, "causative-passive")
+
+    # ---- 〜そう (looks like / seems): 高そう, 食べそう, 降りそう ----
+    add("そう", "い", "appearance")       # い-adjective stem
+    add("そう", "る", "appearance")       # ichidan stem
+    for i, u in _I.items():
+        add(i + "そう", u, "appearance")   # godan continuative stem
+
+    # ---- 〜すぎる (too ~): 高すぎる, 食べすぎる, 飲みすぎる ----
+    add("すぎる", "い", "excess")
+    add("すぎる", "る", "excess")
+    for i, u in _I.items():
+        add(i + "すぎる", u, "excess")
+
+    # ---- 〜なさい (polite imperative): 食べなさい, 読みなさい ----
+    add("なさい", "る", "imperative")
+    for i, u in _I.items():
+        add(i + "なさい", u, "imperative")
+
+    # ---- 〜なくなる (come to stop ~ing): 食べなくなる, 飲まなくなる ----
+    add("なくなる", "る", "negative")
+    for a, u in _A.items():
+        add(a + "なくなる", u, "negative")
+
+    # ---- い-adjective presumptive / polite negative ----
+    add("かろう", "い", "presumptive")            # 高かろう -> 高い
+    add("くありません", "い", "negative")          # 高くありません -> 高い
+    add("くありませんでした", "い", "negative")
+    add("くございません", "い", "negative")
+    add("くないです", "い", "negative")
+    add("くなかったです", "い", "negative")
+
+    # ---- casual long-vowel adjectives: trailing ー -> え (うぜー -> うぜえ, a headword) ----
+    add("ー", "え", "colloquial")
+    for cas, base in (("でけえ", "でかい"), ("つええ", "つよい"),
+                      ("わりい", "わるい"), ("うめえ", "うまい")):
+        add(cas, base, "colloquial")
     return R
 
 

@@ -1,6 +1,7 @@
-# VN Texthooker
+# 🐇 Down the Rabbit Hole
 
-A visual-novel **text hooker** with a **built-in offline Japanese→English dictionary**.
+*Copy a line of Japanese, fall in, and read your way through.* A visual-novel
+**texthooker** with a **built-in offline Japanese→English dictionary**.
 It watches your Windows clipboard for Japanese text (e.g. extracted from a game by
 [Textractor](https://github.com/Artikash/Textractor)), shows it in a clean reader,
 and gives you a **hover dictionary** — point at any word to see its meaning, reading,
@@ -38,8 +39,8 @@ appears instantly. Hover a word for its definition.
 
 ### Visual-novel frequency ranking (optional, recommended for VN readers)
 
-By default, word rarity/ranking uses a general-corpus frequency (`wordfreq`). For
-VN-accurate rarity tiers, import a **visual-novel frequency list** from
+By default, ranking uses a general-corpus frequency (`wordfreq`). For VN-accurate
+ranking, import a **visual-novel frequency list** from
 [jiten.moe](https://jiten.moe/other):
 
 1. Go to **https://jiten.moe/other**, pick **Visual Novel**, and download the
@@ -49,17 +50,18 @@ VN-accurate rarity tiers, import a **visual-novel frequency list** from
    python setup.py --skip-kuromoji --force --freq jiten_vn.zip
    ```
 
-Now rarity tiers are by **VN rank** (top 1,500 words = Common, … rarest = Legendary),
-the popup shows each word's VN frequency rank, and lookups prefer the reading that's
-common in visual novels. Frequency data: jiten.moe, **CC BY-SA 4.0**. (Definitions
-remain JMdict/JMnedict — the same sources jiten itself uses.)
+Now lookups prefer the reading that's common in visual novels, and a longer match is
+only chosen over a shorter common word when it's itself a common VN word — so 一日中
+and という still win, but a rare homograph like 底荷「そこに」"ballast" never buries
+そこ "there". Frequency data: jiten.moe, **CC BY-SA 4.0**. (Definitions remain
+JMdict/JMnedict — the same sources jiten itself uses.)
 
 **No-manual-step alternative:** `python setup.py --skip-kuromoji --force --innocent`
 auto-downloads the **Innocent Corpus** VN/novel frequency list instead. It's convenient
 but coarser — it omits some very common function words and under-counts する — so the
-hand-downloaded jiten.moe VN list above is recommended for the cleanest tiers. The
-frequency loader auto-detects rank-style vs. count-style lists, so any Yomitan
-frequency `.zip` works with `--freq`.
+hand-downloaded jiten.moe VN list above is recommended. The frequency loader
+auto-detects rank-style vs. count-style lists, so any Yomitan frequency `.zip` works
+with `--freq`.
 
 ---
 
@@ -70,13 +72,14 @@ frequency `.zip` works with `--freq`.
 - **Smart longest-match scanning** — catches multi-word expressions and compounds the
   tokenizer splits (一日中, という), with a full de-inflector that also shows the
   inflection trail (読んでいた → 読む · progressive › past).
-- **Smart ranking** so the intended word comes first: part-of-speech (は = particle,
-  not 羽 "feather"), reading (本【ほん】"book", not 本【もと】"origin"), and word
-  frequency (居る "to be", not 射る "to shoot").
-- **Name dictionary (JMnedict)** — recognizes character and place names (田中 → "Tanaka").
-- **Word rarity tiers** — every word gets a Fortnite-style rarity badge by how common it
-  is: Common → Uncommon → Rare → Epic → Legendary → Mythic (the rarer the word, the
-  flashier the badge).
+- **Tokenizer-anchored ranking** so the intended word comes first. It trusts kuromoji's
+  own analysis of each token — part-of-speech (は = particle, not 羽 "feather"), reading
+  (本【ほん】"book", not 本【もと】"origin"), dictionary form (居る "to be", not 射る
+  "to shoot") — and only lets a *longer* match win when that longer match is itself a
+  common word. So そこ stays "there" (not the rare 底荷 "ballast"), 村 stays "village"
+  (not a surname), while real compounds like 一日中 and という are still caught.
+- **Name dictionary (JMnedict)** — recognizes character and place names (田中 → "Tanaka"),
+  ranked below a real word of the same length.
 - **Polished popup** — click a word to pin it open, a copy button, and a Jisho.org link;
   hover for a quick peek.
 - **Furigana toggle**, adjustable font size, pause/resume capture, and clear.
@@ -126,7 +129,8 @@ python server.py --no-browser    # don't auto-open the browser
 - `setup.py` downloads kuromoji.js + its dictionary into `static/kuromoji/`, and
   builds `dict.sqlite` (entries + a term index) from JMdict.
 - `server.py` polls the clipboard, streams new text to the page, and serves
-  `/lookup?term=…` from the SQLite dictionary.
+  longest-match lookups from the SQLite dictionary via `/scan` (de-inflecting and
+  ranking candidates so the intended word comes first).
 - `static/app.js` tokenizes each line in the browser, wraps words in hoverable
   spans, and fetches definitions on demand.
 

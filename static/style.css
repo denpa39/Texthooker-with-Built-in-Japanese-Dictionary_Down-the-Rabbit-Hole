@@ -1,16 +1,35 @@
+/* Theme model ----------------------------------------------------------- *
+ * A theme is just 6 core colors (+ a font). Everything else — panels, lines,
+ * borders, muted text, gradients, hover overlays — is DERIVED from them with
+ * color-mix(), so any custom palette (dark, light, sepia…) adapts automatically.
+ * settings.js overrides the core vars on <html> for presets / custom colors.   */
 :root {
-  --bg: #0e0f13;
-  --bg-soft: #171922;
-  --panel: #1d2030;
-  --line: #2a2e42;
-  --text: #e9ecf5;
-  --muted: #8b91a8;
-  --accent: #7aa2ff;
-  --accent-2: #ffcf6b;
-  --pos: #6be0a0;
-  --glow1: #1b2030;
-  --glow2: #1a2236;
-  --shadow: 0 10px 40px rgba(0,0,0,.55);
+  /* core palette (the only values a preset / colour picker sets).
+     Default = "Alice"; settings.js swaps these for the other character themes. */
+  --bg: #eef4fb;
+  --text: #213243;
+  --accent: #3f6fc0;
+  --accent-2: #a9762a;
+  --pos: #2f7d4a;
+  --danger: #c0392b;
+
+  /* derived — recompute from the core vars above whenever those change */
+  --bg-soft:    color-mix(in srgb, var(--text) 6%,  var(--bg));   /* popup / surfaces */
+  --panel:      color-mix(in srgb, var(--text) 10%, var(--bg));   /* buttons */
+  --panel-hi:   color-mix(in srgb, var(--accent) 22%, var(--panel));
+  --line:       color-mix(in srgb, var(--text) 16%, var(--bg));
+  --muted:      color-mix(in srgb, var(--text) 52%, var(--bg));
+  --furigana:   color-mix(in srgb, var(--text) 70%, var(--bg));   /* readable reading tint above kanji */
+  --on-accent:  var(--bg);                                        /* text over an accent fill */
+  --grad1:      color-mix(in srgb, var(--accent)   12%, var(--bg));
+  --grad2:      color-mix(in srgb, var(--accent-2)  9%, var(--bg));
+  --hover-overlay:  color-mix(in srgb, var(--text)   5%, transparent);
+  --latest-overlay: color-mix(in srgb, var(--accent) 9%, transparent);
+  --toolbar-bg: color-mix(in srgb, var(--bg-soft) 86%, transparent);
+  --shadow: 0 10px 40px rgba(0, 0, 0, .45);
+
+  /* typography */
+  --font-family: "Segoe UI", system-ui, sans-serif;
   --font-size: 30px;
 }
 
@@ -18,11 +37,11 @@
 html, body { height: 100%; margin: 0; }
 body {
   background:
-    radial-gradient(1200px 600px at 80% -10%, #1b2030 0%, transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, #1a2236 0%, transparent 55%),
+    radial-gradient(1200px 600px at 80% -10%, var(--grad1) 0%, transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, var(--grad2) 0%, transparent 55%),
     var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-family);
   display: flex;
   flex-direction: column;
 }
@@ -33,7 +52,7 @@ body {
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
-  background: rgba(20,22,32,.85);
+  background: var(--toolbar-bg);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
   position: sticky;
@@ -54,21 +73,79 @@ body {
   font-size: 13px;
   transition: background .15s, border-color .15s;
 }
-#toolbar button:hover { background: #262a3d; border-color: var(--accent); }
-#toolbar button.active { background: #2c3350; border-color: var(--accent); color: var(--accent); }
+#toolbar button:hover { background: var(--panel-hi); border-color: var(--accent); }
+#toolbar button.active { background: var(--panel-hi); border-color: var(--accent); color: var(--accent); }
 #toolbar button.icon-btn { padding: 6px 8px; margin-left: -6px; }
-#toolbar button.icon-btn:hover { color: #ff8b8b; border-color: #ff8b8b; }
+#toolbar button.icon-btn:hover { color: var(--danger); border-color: var(--danger); }
 
 .fontctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .fontctl input { accent-color: var(--accent); }
 
 .status, .dict-status { font-size: 12px; padding: 3px 9px; border-radius: 999px; }
-.status.connecting { color: var(--accent-2); background: rgba(255,207,107,.12); }
-.status.live { color: var(--pos); background: rgba(107,224,160,.12); }
-.status.paused { color: var(--muted); background: rgba(139,145,168,.15); }
-.status.error  { color: #ff8b8b; background: rgba(255,139,139,.12); }
-.dict-status { color: var(--muted); background: rgba(139,145,168,.12); }
-.dict-status.ready { color: var(--pos); background: rgba(107,224,160,.12); }
+.status.connecting { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 14%, transparent); }
+.status.live { color: var(--pos); background: color-mix(in srgb, var(--pos) 14%, transparent); }
+.status.paused { color: var(--muted); background: color-mix(in srgb, var(--muted) 16%, transparent); }
+.status.error  { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.dict-status { color: var(--muted); background: color-mix(in srgb, var(--muted) 13%, transparent); }
+.dict-status.ready { color: var(--pos); background: color-mix(in srgb, var(--pos) 13%, transparent); }
+
+/* Settings panel ------------------------------------------------------- */
+.settings {
+  position: fixed;
+  top: 58px;
+  right: 14px;
+  z-index: 60;
+  width: 280px;
+  max-height: calc(100vh - 76px);
+  overflow-y: auto;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 14px 16px 16px;
+  font-size: 13px;
+}
+.settings.hidden { display: none; }
+.settings .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.settings .set-head b { font-size: 14px; }
+.settings .set-x {
+  background: transparent; border: none; color: var(--muted);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 2px;
+}
+.settings .set-x:hover { color: var(--danger); }
+.settings .set-label {
+  margin: 14px 0 7px; color: var(--muted);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+}
+.settings .presets { display: flex; flex-wrap: wrap; gap: 7px; }
+.settings .preset {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 9px 5px 7px; cursor: pointer;
+  color: var(--text); font-size: 12px; transition: border-color .15s;
+}
+.settings .preset:hover { border-color: var(--accent); }
+.settings .preset.active { border-color: var(--accent); color: var(--accent); }
+.settings .swatch { width: 13px; height: 13px; border-radius: 50%; border: 1px solid rgba(128,128,128,.4); }
+.settings .colors { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.settings .colors label {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted);
+}
+.settings .colors input[type="color"] {
+  inline-size: 30px; block-size: 22px; padding: 0;
+  border: 1px solid var(--line); border-radius: 5px; background: none; cursor: pointer;
+}
+.settings select {
+  width: 100%; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; cursor: pointer; font-size: 13px;
+}
+.settings .set-reset {
+  margin-top: 16px; width: 100%;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px; cursor: pointer; font-size: 13px;
+  transition: border-color .15s, color .15s;
+}
+.settings .set-reset:hover { border-color: var(--danger); color: var(--danger); }
 
 /* Lines ---------------------------------------------------------------- */
 #lines {
@@ -86,15 +163,15 @@ body {
   transition: background .2s, border-color .2s;
   position: relative;
 }
-.line:hover { background: rgba(255,255,255,.025); border-left-color: var(--line); }
-.line.latest { border-left-color: var(--accent); background: rgba(122,162,255,.05); }
+.line:hover { background: var(--hover-overlay); border-left-color: var(--line); }
+.line.latest { border-left-color: var(--accent); background: var(--latest-overlay); }
 .sentence { word-break: break-word; }
 
 .token { border-radius: 4px; cursor: default; transition: background .1s, color .1s; }
 .token.word { cursor: help; }
-.token.word:hover { background: var(--accent); color: #0e0f13; }
+.token.word:hover { background: var(--accent); color: var(--on-accent); }
 
-ruby rt { font-size: .45em; color: var(--muted); user-select: none; }
+ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
 
 /* Dictionary popup ----------------------------------------------------- */
 .popup {
@@ -110,6 +187,9 @@ ruby rt { font-size: .45em; color: var(--muted); user-select: none; }
   padding: 14px 16px;
   font-size: 15px;
   line-height: 1.5;
+  pointer-events: none;   /* hover = transient peek; mouse passes THROUGH to the
+                             words beneath so they stay hoverable. Pinning (click)
+                             re-enables interaction below. */
 }
 .popup.hidden { display: none; }
 .entry { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
@@ -124,72 +204,16 @@ ruby rt { font-size: .45em; color: var(--muted); user-select: none; }
 .sense .num { color: var(--muted); margin-right: 5px; }
 .sense .misc { color: var(--accent-2); font-size: 12px; }
 .popup .empty { color: var(--muted); font-style: italic; }
+.entry .fold {
+  margin-top: 7px; font-size: 12px; color: var(--muted); cursor: pointer;
+  display: inline-block; border-bottom: 1px dotted currentColor;
+}
+.entry .fold:hover { color: var(--accent); }
 
-/* scan-popup extras: inflection trail, common tag, name tag, copy/jisho, pin */
+/* scan-popup extras: inflection trail, name tag, copy/jisho, pin */
 .entry .inflect { font-size: 12px; font-style: italic; color: var(--accent); margin-bottom: 3px; }
 .entry.name .hw { color: var(--accent); }
 
-/* Fortnite-style word rarity badge */
-.entry .rarity {
-  margin-left: auto; align-self: center;
-  font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
-  padding: 2px 7px; border-radius: 5px; border: 1px solid currentColor;
-  position: relative; overflow: hidden;
-}
-.r-common    { color: #9aa3b2; background: rgba(154,163,178,.12); }
-.r-uncommon  { color: #4ec84e; background: rgba(78,200,78,.13); }
-.r-rare      { color: #3aa0ff; background: rgba(58,160,255,.15); }
-.r-epic      { color: #c07cff; background: rgba(177,92,255,.17); }
-.r-legendary { color: #ffac4d; background: rgba(255,155,48,.17); }
-.r-mythic    { color: #ffe27a; }
-
-/* --- higher-tier animations: pulsing glow, shine sweep, mythic shimmer --- */
-@keyframes r-glow-epic {
-  0%, 100% { box-shadow: 0 0 3px rgba(177,92,255,.35); }
-  50%      { box-shadow: 0 0 11px rgba(177,92,255,.80); }
-}
-@keyframes r-glow-leg {
-  0%, 100% { box-shadow: 0 0 5px rgba(255,160,60,.45); }
-  50%      { box-shadow: 0 0 16px rgba(255,160,60,.95); }
-}
-@keyframes r-glow-myth {
-  0%, 100% { box-shadow: 0 0 7px rgba(255,215,80,.55); }
-  50%      { box-shadow: 0 0 20px rgba(255,225,120,1); }
-}
-@keyframes r-shine {        /* a light glint sweeping across the badge */
-  0%        { left: -70%; }
-  55%, 100% { left: 130%; }
-}
-@keyframes r-myth-bg {      /* drifting gold shimmer */
-  0%   { background-position: 0% 50%; }
-  100% { background-position: 200% 50%; }
-}
-
-.r-epic      { animation: r-glow-epic 2.2s ease-in-out infinite; }
-.r-legendary { animation: r-glow-leg 1.8s ease-in-out infinite; }
-.r-mythic {
-  background: linear-gradient(110deg,
-    rgba(255,210,63,.18), rgba(255,170,60,.34), rgba(255,245,170,.55),
-    rgba(255,170,60,.34), rgba(255,210,63,.18));
-  background-size: 220% 100%;
-  border-color: #ffe27a;
-  animation: r-myth-bg 3s linear infinite, r-glow-myth 1.6s ease-in-out infinite;
-}
-.r-epic::after, .r-legendary::after, .r-mythic::after {
-  content: ""; position: absolute; top: 0; bottom: 0; left: -70%; width: 45%;
-  background: linear-gradient(100deg, transparent, rgba(255,255,255,.6), transparent);
-  transform: skewX(-20deg);
-  animation: r-shine 3.4s ease-in-out infinite;
-}
-.r-legendary::after { animation-duration: 2.8s; }
-.r-mythic::after    { animation-duration: 2.2s; }
-
-@media (prefers-reduced-motion: reduce) {
-  .r-epic, .r-legendary, .r-mythic { animation: none; }
-  .r-epic::after, .r-legendary::after, .r-mythic::after { display: none; }
-  .r-legendary { box-shadow: 0 0 9px rgba(255,155,48,.30); }
-  .r-mythic    { box-shadow: 0 0 11px rgba(255,210,63,.40); }
-}
 .entry .name-tag {
   font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
   border-radius: 4px; padding: 1px 5px; margin-left: auto;
@@ -198,14 +222,15 @@ ruby rt { font-size: .45em; color: var(--muted); user-select: none; }
   background: transparent; border: none; color: var(--muted); cursor: pointer;
   font-size: 14px; text-decoration: none; padding: 0 2px;
 }
+.entry .mini.push { margin-left: auto; }  /* right-align controls when there's no badge */
 .entry .mini:hover { color: var(--accent); }
-.popup.pinned { border-color: var(--accent); }
+.popup.pinned { border-color: var(--accent); pointer-events: auto; }  /* clicked-open popup is interactive */
 .pin-close {
   float: right; margin: -4px -6px 2px 0;
   background: var(--panel); color: var(--muted); border: 1px solid var(--line);
   border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font-size: 15px; line-height: 1;
 }
-.pin-close:hover { color: #ff8b8b; border-color: #ff8b8b; }
+.pin-close:hover { color: var(--danger); border-color: var(--danger); }
 
 /* Hint ----------------------------------------------------------------- */
 .hint {
@@ -221,4 +246,4 @@ ruby rt { font-size: .45em; color: var(--muted); user-select: none; }
 /* Scrollbar ------------------------------------------------------------ */
 ::-webkit-scrollbar { width: 12px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; border: 3px solid transparent; background-clip: content-box; }
-::-webkit-scrollbar-thumb:hover { background: #39405c; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--accent) 40%, var(--line)); background-clip: content-box; }
