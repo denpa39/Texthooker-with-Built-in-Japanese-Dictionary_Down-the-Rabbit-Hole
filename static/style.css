@@ -18,15 +18,18 @@
   --panel:      color-mix(in srgb, var(--text) 10%, var(--bg));   /* buttons */
   --panel-hi:   color-mix(in srgb, var(--accent) 22%, var(--panel));
   --line:       color-mix(in srgb, var(--text) 16%, var(--bg));
-  --muted:      color-mix(in srgb, var(--text) 52%, var(--bg));
-  --furigana:   color-mix(in srgb, var(--text) 70%, var(--bg));   /* readable reading tint above kanji */
+  --muted:      color-mix(in srgb, var(--text) 70%, var(--bg));   /* secondary text — WCAG 4.5:1 on light themes */
+  --furigana:   color-mix(in srgb, var(--text) 80%, var(--bg));   /* readable reading tint above kanji */
   --on-accent:  var(--bg);                                        /* text over an accent fill */
   --grad1:      color-mix(in srgb, var(--accent)   12%, var(--bg));
   --grad2:      color-mix(in srgb, var(--accent-2)  9%, var(--bg));
-  --hover-overlay:  color-mix(in srgb, var(--text)   5%, transparent);
-  --latest-overlay: color-mix(in srgb, var(--accent) 9%, transparent);
+  --hover-overlay:  color-mix(in srgb, var(--text)   8%, transparent);
+  --latest-overlay: color-mix(in srgb, var(--accent) 15%, transparent);
   --toolbar-bg: color-mix(in srgb, var(--bg-soft) 86%, transparent);
-  --shadow: 0 10px 40px rgba(0, 0, 0, .45);
+  /* Shadows are an elevation cue, conventionally dark — the one value left theme-
+     agnostic on purpose. Softened from .45 so it's airy on light themes; on dark
+     themes it recedes and the popup's 1px border carries the separation. */
+  --shadow: 0 10px 38px rgba(0, 0, 0, .28);
 
   /* typography */
   --font-family: "Segoe UI", system-ui, sans-serif;
@@ -34,6 +37,14 @@
 }
 
 * { box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }   /* keyboard focus, theme-adaptive */
+
+/* Smooth the jump when switching themes (animate colours, not the gradients). */
+@media (prefers-reduced-motion: no-preference) {
+  body, #toolbar, .popup, .settings {
+    transition: background-color .25s, color .25s, border-color .25s;
+  }
+}
 html, body { height: 100%; margin: 0; }
 body {
   background:
@@ -156,10 +167,11 @@ body {
   line-height: 1.9;
 }
 .line {
-  margin: 0 0 .55em;
+  max-width: 36em;        /* comfortable reading measure on wide screens (em tracks --font-size) */
+  margin: 0 auto .55em;   /* …while #lines stays full-bleed: 40vh padding + auto-scroll untouched */
   padding: 6px 10px;
   border-radius: 10px;
-  border-left: 3px solid transparent;
+  border-left: 4px solid transparent;
   transition: background .2s, border-color .2s;
   position: relative;
 }
@@ -168,8 +180,9 @@ body {
 .sentence { word-break: break-word; }
 
 .token { border-radius: 4px; cursor: default; transition: background .1s, color .1s; }
-.token.word { cursor: help; }
-.token.word:hover { background: var(--accent); color: var(--on-accent); }
+.token.word { cursor: pointer; }   /* click pins the popup; hover peeks */
+.token.word:hover,
+.token.word:focus-visible { background: var(--accent); color: var(--on-accent); outline: none; }
 
 ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
 
@@ -247,3 +260,26 @@ ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
 ::-webkit-scrollbar { width: 12px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; border: 3px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--accent) 40%, var(--line)); background-clip: content-box; }
+
+/* Peek-popup footer: teaches the two least-discoverable features. Sticks to the
+   bottom of the (scrollable) popup, full-bleed over its 14/16px padding. */
+.popup-foot {
+  position: sticky; bottom: -14px;
+  margin: 10px -16px -14px; padding: 7px 16px;
+  background: var(--bg-soft); border-top: 1px solid var(--line);
+  font-size: 11px; color: var(--muted); text-align: center; letter-spacing: .02em;
+}
+/* Clear-all asks once before wiping everything. */
+#clearAllBtn.confirm { color: var(--danger); border-color: var(--danger); }
+/* Font-size numeric readout next to the A slider. */
+.fontctl output { min-width: 2.6ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+
+/* Responsive — narrow windows / small screens ------------------------- */
+@media (max-width: 560px) {
+  #toolbar { gap: 8px; padding: 8px 10px; }
+  .brand .brand-text { display: none; }   /* collapse the wordmark to just 🐇 */
+  #dictStatus { display: none; }           /* drop the tokenizer pill when cramped */
+}
+@media (max-width: 420px) {
+  .settings { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 55vh; }
+}

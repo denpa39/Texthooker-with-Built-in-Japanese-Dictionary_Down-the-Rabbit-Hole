@@ -129,19 +129,25 @@
     });
     fontSel.addEventListener("change", () => { settings.font = fontSel.value; commit(); });
 
-    // text-size slider (re-used from the toolbar)
+    // text-size slider (re-used from the toolbar) + its numeric readout
+    const fontVal = document.getElementById("fontVal");
+    const showSize = () => { if (fontVal) fontVal.textContent = settings.fontSize; };
     if (sizeRange) {
       sizeRange.addEventListener("input", () => {
         settings.fontSize = +sizeRange.value;
         document.documentElement.style.setProperty("--font-size", sizeRange.value + "px");
+        showSize();
         save(settings);
       });
     }
 
-    // reset
-    panel.querySelector("#setReset").addEventListener("click", () => {
+    // reset (with a brief confirmation)
+    panel.querySelector("#setReset").addEventListener("click", (e) => {
       settings = Object.assign({}, DEFAULTS, { colors: {} });
       commit();
+      const b = e.currentTarget;
+      b.textContent = "Reset ✓";
+      setTimeout(() => (b.textContent = "Reset to default"), 900);
     });
 
     // open / close
@@ -166,6 +172,7 @@
       });
       fontSel.value = settings.font;
       if (sizeRange) sizeRange.value = settings.fontSize;
+      showSize();
     }
 
     function commit() { apply(settings); save(settings); syncControls(); }

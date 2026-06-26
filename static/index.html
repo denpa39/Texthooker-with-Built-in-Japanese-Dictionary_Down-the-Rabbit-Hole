@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,17 +9,18 @@
 </head>
 <body>
 <header id="toolbar">
-  <span class="brand">🐇&nbsp;Down&nbsp;the&nbsp;Rabbit&nbsp;Hole</span>
+  <span class="brand">🐇<span class="brand-text">&nbsp;Down&nbsp;the&nbsp;Rabbit&nbsp;Hole</span></span>
   <span id="status" class="status connecting" title="connection status">connecting…</span>
   <span class="spacer"></span>
   <button id="pauseBtn" title="Pause / resume clipboard capture">⏸ Pause</button>
   <button id="furiBtn" title="Toggle furigana readings">あ Furigana</button>
   <button id="setBtn" title="Appearance: theme, colours, font">⚙ Theme</button>
   <label class="fontctl">A
-    <input id="fontRange" type="range" min="16" max="56" value="30">
+    <input id="fontRange" type="range" min="16" max="56" step="1" value="30" aria-label="Reader text size">
+    <output id="fontVal">30</output>
   </label>
-  <button id="clearBtn" title="Undo — remove the most recent line">⌫</button>
-  <button id="clearAllBtn" class="icon-btn" title="Clear all lines">🗑</button>
+  <button id="clearBtn" title="Undo — remove the most recent line" aria-label="Undo last line">⌫</button>
+  <button id="clearAllBtn" class="icon-btn" title="Clear all lines" aria-label="Clear all lines">🗑</button>
   <span id="dictStatus" class="dict-status" title="tokenizer status">loading tokenizer…</span>
 </header>
 
@@ -34,13 +35,13 @@
   <button id="setReset" class="set-reset">Reset to default</button>
 </aside>
 
-<main id="lines"></main>
+<main id="lines" lang="ja"></main>
 
-<div id="popup" class="popup hidden"></div>
+<div id="popup" class="popup hidden" role="dialog" aria-label="Dictionary entry"></div>
 
 <div id="hint" class="hint">
   Copy Japanese text (or hook a game with <b>Textractor</b> → Clipboard output) and it
-  appears here. <b>Hover</b> any word for its meaning.
+  appears here. <b>Hover</b> a word for its meaning — <b>click</b> to keep it open.
 </div>
 
 <script src="/static/kuromoji/kuromoji.js"></script>

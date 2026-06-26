@@ -99,6 +99,8 @@ function buildSentence(text) {
 
     if (isJapanese(surface) && t.pos !== "記号") {
       span.classList.add("word");
+      span.tabIndex = 0;                 // reachable by keyboard
+      span.setAttribute("role", "button");
       // dictionary form: prefer basic_form (handles inflection), else surface
       const base = (t.basic_form && t.basic_form !== "*") ? t.basic_form : surface;
       span.dataset.term = base;
@@ -137,8 +139,14 @@ function addLine(text) {
   line.dataset.raw = text;
   line.appendChild(buildSentence(text));
 
+  // Only auto-scroll if the reader was already at the bottom — don't yank the user
+  // away when they've scrolled up to re-read. (Measured before append.)
+  const wasAtBottom = linesEl.scrollHeight - linesEl.scrollTop - linesEl.clientHeight < 80;
   linesEl.appendChild(line);
-  linesEl.scrollTo({ top: linesEl.scrollHeight, behavior: "smooth" });
+  if (wasAtBottom) {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    linesEl.scrollTo({ top: linesEl.scrollHeight, behavior: reduce ? "auto" : "smooth" });
+  }
 
   // keep DOM bounded
   while (linesEl.children.length > 300) linesEl.removeChild(linesEl.firstChild);
@@ -237,11 +245,15 @@ function renderCandidate(c) {
   copy.className = "mini" + (c.kind === "name" ? "" : " push");
   copy.textContent = "⧉";
   copy.title = "copy word";
+  copy.setAttribute("aria-label", "copy word");
   copy.addEventListener("click", ev => {
     ev.stopPropagation();
-    if (navigator.clipboard) navigator.clipboard.writeText(primary);
-    copy.textContent = "✓";
-    setTimeout(() => (copy.textContent = "⧉"), 900);
+    if (!navigator.clipboard) return;
+    // only show ✓ once the write actually succeeds
+    navigator.clipboard.writeText(primary).then(() => {
+      copy.textContent = "✓";
+      setTimeout(() => (copy.textContent = "⧉"), 900);
+    }).catch(() => {});
   });
   head.appendChild(copy);
 
@@ -249,6 +261,7 @@ function renderCandidate(c) {
   jisho.className = "mini";
   jisho.textContent = "↗";
   jisho.title = "look up on Jisho.org";
+  jisho.setAttribute("aria-label", "look up " + primary + " on Jisho.org");
   jisho.href = "https://jisho.org/search/" + encodeURIComponent(primary);
   jisho.target = "_blank";
   jisho.rel = "noopener";
@@ -288,13 +301,18 @@ function renderCandidate(c) {
   return div;
 }
 
+let lookupSeq = 0;
 async function showScanPopup(target) {
   const line = target.closest(".line");
   if (!line) return;
   const off = parseInt(target.dataset.off || "0", 10);
   const text = line.dataset.raw.slice(off);
+  const seq = ++lookupSeq;
   const cands = await fetchScan(text, target.dataset.pos, target.dataset.jreading,
                                 target.dataset.term, target.dataset.surface);
+  // A newer peek superseded this one while the lookup was in flight — drop it so a
+  // slow response can't overwrite the word the user is now on. (Pins always render.)
+  if (!pinned && seq !== lookupSeq) return;
 
   popup.innerHTML = "";
   if (pinned) {
@@ -302,6 +320,7 @@ async function showScanPopup(target) {
     close.className = "pin-close";
     close.textContent = "×";
     close.title = "close";
+    close.setAttribute("aria-label", "close");
     close.addEventListener("click", unpin);
     popup.appendChild(close);
   }
@@ -313,7 +332,18 @@ async function showScanPopup(target) {
   } else {
     cands.forEach(c => popup.appendChild(renderCandidate(c)));
   }
+  // Peek footer: teach the two least-discoverable features (and signal scrollability).
+  let foot = null;
+  if (!pinned && cands.length) {
+    foot = document.createElement("div");
+    foot.className = "popup-foot";
+    popup.appendChild(foot);
+  }
   positionPopup(target);
+  if (foot) {
+    const more = popup.scrollHeight > popup.clientHeight + 1;
+    foot.textContent = more ? "click to pin · scroll for more ↓" : "click to pin";
+  }
   popup.classList.remove("hidden");
 }
 
@@ -350,31 +380,39 @@ let hideTimer = null;
 function scheduleHide() {
   if (pinned) return;
   clearTimeout(hideTimer);
-  hideTimer = setTimeout(() => popup.classList.add("hidden"), 180);
+  hideTimer = setTimeout(() => { popup.classList.add("hidden"); activeWord = null; }, 180);
 }
 function cancelHide() { clearTimeout(hideTimer); }
 function unpin() {
   pinned = false;
+  activeWord = null;
   popup.classList.remove("pinned");
   popup.classList.add("hidden");
 }
 
-linesEl.addEventListener("mouseover", e => {
-  const t = e.target.closest(".token.word");
-  if (!t || pinned) return;
+let activeWord = null;   // the word the popup is currently showing (flicker guard)
+function peek(t) {
+  if (!t || pinned || t === activeWord) return;   // skip re-render of the same word
+  activeWord = t;
   cancelHide();
   showScanPopup(t);
-});
-linesEl.addEventListener("mouseout", e => {
-  if (e.target.closest(".token.word")) scheduleHide();
-});
-linesEl.addEventListener("click", e => {
-  const t = e.target.closest(".token.word");
-  if (!t) return;
+}
+function pin(t) {
   pinned = true;
   popup.classList.add("pinned");
+  activeWord = t;
   cancelHide();
-  showScanPopup(t);          // click a word to pin the popup open
+  showScanPopup(t);
+}
+linesEl.addEventListener("mouseover", e => peek(e.target.closest(".token.word")));
+linesEl.addEventListener("mouseout", e => { if (e.target.closest(".token.word")) scheduleHide(); });
+linesEl.addEventListener("click", e => { const t = e.target.closest(".token.word"); if (t) pin(t); });
+// keyboard: Tab to a word (focus peeks it), Enter/Space pins it open.
+linesEl.addEventListener("focusin", e => peek(e.target.closest(".token.word")));
+linesEl.addEventListener("focusout", e => { if (e.target.closest(".token.word")) scheduleHide(); });
+linesEl.addEventListener("keydown", e => {
+  const t = e.target.closest(".token.word");
+  if (t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); pin(t); }
 });
 popup.addEventListener("mouseenter", cancelHide);
 popup.addEventListener("mouseleave", scheduleHide);
@@ -398,12 +436,20 @@ document.addEventListener("click", e => {
 /* ---- clipboard stream (SSE) ------------------------------------------- */
 function connectStream() {
   const es = new EventSource("/events");
-  es.onopen = () => { statusEl.textContent = "● live"; statusEl.className = "status live"; };
+  es.onopen = () => {
+    // don't flash "live" over a paused session
+    if (!pauseBtn.classList.contains("active")) {
+      statusEl.textContent = "● live"; statusEl.className = "status live";
+    }
+  };
   es.onmessage = ev => {
     try { addLine(JSON.parse(ev.data).text); } catch (_) {}
   };
   es.onerror = () => {
-    statusEl.textContent = "reconnecting…"; statusEl.className = "status error";
+    // a routine reconnect, not an error — keep the calm "connecting" styling.
+    if (!pauseBtn.classList.contains("active")) {
+      statusEl.textContent = "connecting…"; statusEl.className = "status connecting";
+    }
     // EventSource auto-reconnects.
   };
 }
@@ -452,8 +498,25 @@ document.getElementById("clearBtn").addEventListener("click", () => {
   }
 });
 
-// Clear all lines.
-document.getElementById("clearAllBtn").addEventListener("click", () => {
+// Clear all lines — asks once (inline) before wiping everything.
+const clearAllBtn = document.getElementById("clearAllBtn");
+let clearArmed = false, clearTimer = null;
+function disarmClear() {
+  clearArmed = false; clearTimeout(clearTimer);
+  clearAllBtn.classList.remove("confirm");
+  clearAllBtn.textContent = "🗑";
+  clearAllBtn.title = "Clear all lines";
+}
+clearAllBtn.addEventListener("click", () => {
+  if (!clearArmed) {                       // first click: arm + ask
+    clearArmed = true;
+    clearAllBtn.classList.add("confirm");
+    clearAllBtn.textContent = "🗑?";
+    clearAllBtn.title = "Click again to clear everything";
+    clearTimer = setTimeout(disarmClear, 2500);
+    return;
+  }
+  disarmClear();                           // second click: do it
   if (!popup.classList.contains("hidden")) unpin();
   linesEl.innerHTML = "";
   hint.classList.remove("gone");
