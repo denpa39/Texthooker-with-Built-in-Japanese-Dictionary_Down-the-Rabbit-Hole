@@ -7,7 +7,7 @@ It watches your Windows clipboard for Japanese text (e.g. extracted from a game 
 and gives you a **hover dictionary** — point at any word to see its meaning, reading,
 and part of speech, Yomitan-style.
 
-Pure Python standard library + a browser UI. No `pip install` required.
+
 
 ---
 
