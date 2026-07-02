@@ -11,3 +11,4 @@ __pycache__/
 
 # Local machine-specific editor/agent settings
 .claude/settings.local.json
+textractor/

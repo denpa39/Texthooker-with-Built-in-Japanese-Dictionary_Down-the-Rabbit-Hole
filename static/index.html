@@ -13,6 +13,7 @@
   <span id="status" class="status connecting" role="status" title="Connecting…" aria-label="Connecting"></span>
   <span id="stats" class="stats" title="Characters read this session · reading speed"></span>
   <span class="spacer"></span>
+  <button id="attachBtn" title="Attach to a game — embedded Textractor, no clipboard needed">Attach</button>
   <button id="pauseBtn" title="Pause / resume clipboard capture">Pause</button>
   <button id="furiBtn" title="Toggle furigana readings">Furigana</button>
   <div id="alignSeg" class="seg" role="group" aria-label="Text alignment">
@@ -53,6 +54,14 @@
     <button id="italicToggle" class="style-toggle" title="Toggle italic reader text" aria-pressed="false"><i>I</i></button>
   </div>
   <button id="setReset" class="set-reset">Reset to default</button>
+</aside>
+
+<aside id="hookPanel" class="settings hidden" aria-label="Attach to game">
+  <div class="set-head"><b>Attach to game</b><button id="hookClose" class="set-x" title="close">×</button></div>
+  <div id="hookMsg" class="hook-msg"></div>
+  <div id="procList" class="proc-list"></div>
+  <div id="hookList" class="hook-list"></div>
+  <button id="detachBtn" class="set-reset hidden">Detach</button>
 </aside>
 
 <main id="lines" lang="ja"></main>

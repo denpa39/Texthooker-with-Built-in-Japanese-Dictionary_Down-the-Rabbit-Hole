@@ -26,14 +26,21 @@ python setup.py            # (or double-click setup.bat)
 python server.py           # (or double-click run.bat)
 ```
 
-Your browser opens at `http://127.0.0.1:3939`. Copy some Japanese text and it
-appears instantly. Hover a word for its definition.
+The app opens in **its own window** (no browser needed — falls back to your browser
+if `pywebview` isn't installed). Copy some Japanese text and it appears instantly.
+Hover a word for its definition.
 
-### Using it with a game
+### Using it with a game (built-in hooking — no external Textractor)
 
-1. Run a text extractor such as **Textractor** and hook your visual novel.
-2. In Textractor, enable the **Copy to Clipboard** extension (it ships with it).
-3. Start this app — every line the game produces shows up automatically.
+1. Start your visual novel.
+2. Click **Attach** in the toolbar and pick the game from the list.
+3. Advance the game a line or two — its text channels appear in the panel.
+   Click the one showing the actual dialogue. Done: every line streams in.
+
+Setup downloads Textractor's hook engine automatically and the app drives it
+internally (`textractor/`, GPL-3.0). The old way still works too: run Textractor
+yourself with its **Copy to Clipboard** extension — the app watches the clipboard
+as a fallback.
 
 **Tip:** click a word to pin its popup open; press **Esc** to close. Hover gives a quick peek.
 
@@ -114,6 +121,7 @@ with `--freq`.
 | Control | What it does |
 |---|---|
 | status dot | Connection state at a glance — green = ready, orange = paused, red = disconnected (hover for the label) |
+| **Attach** | Hook a running game directly (embedded Textractor) — pick the process, then the text channel |
 | **Pause** / **Resume** | Stop/continue reading the clipboard |
 | **Furigana** | Show readings above kanji |
 | ▤ alignment icons | Text alignment — left, center, right, or justify |
@@ -156,7 +164,10 @@ python setup.py --skip-kuromoji   # only rebuild the dictionary DB
 
 ```sh
 python server.py --port 7000     # use a different port
-python server.py --no-browser    # don't auto-open the browser
+python server.py --browser       # open in the web browser instead of the app window
+python server.py --no-browser    # serve only; open nothing
+python setup.py --textractor     # (re)download only the embedded Textractor
+python setup.py --no-textractor  # skip Textractor during setup
 ```
 
 ---
@@ -193,5 +204,7 @@ python server.py --no-browser    # don't auto-open the browser
 - Definitions: **JMdict / JMnedict** (EDRDG licence).
 - De-inflection rules: ported from **Yomitan**'s Japanese transforms — **GPL-3.0**
   (`deinflect_data.py`; if you redistribute this project, GPL-3.0 terms apply to it).
+- Game hooking: **Textractor** — GPL-3.0 (downloaded to `textractor/`, driven as a
+  separate process).
 - Pitch accent: **Kanjium** — CC BY-SA 4.0.
 - VN frequency: **jiten.moe** — CC BY-SA 4.0.

@@ -384,6 +384,23 @@ ruby rt { font-size: var(--furi-size); color: var(--furigana); user-select: none
 /* Clear-all asks once before wiping everything. */
 #clearAllBtn.confirm { color: var(--danger); border-color: var(--danger); }
 
+/* Attach panel: game process picker + text-channel (hook) picker. */
+.hook-msg { color: var(--muted); font-size: 12px; margin: 6px 0 10px; line-height: 1.5; }
+.proc-item, .hook-item {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  background: var(--panel); color: var(--text); text-align: left;
+  border: 1px solid var(--line); border-radius: 3px;
+  padding: 7px 9px; margin-bottom: 6px; cursor: pointer; font-size: 12px;
+  transition: border-color .15s;
+}
+.proc-item:hover, .hook-item:hover { border-color: var(--accent); }
+.hook-item.active { border-color: var(--accent); background: var(--panel-hi); }
+.proc-item span, .hook-prev {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hook-name { color: var(--accent); font-size: 11px; }
+#detachBtn.hidden { display: none; }
+
 /* Session stats (characters read · reading speed) next to the status dot. */
 .stats {
   font-size: 11px; letter-spacing: .02em;

@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import deinflect
+import hook
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -116,6 +117,21 @@ class Broadcaster:
 
 broadcaster = Broadcaster()
 
+_last_published = [None]
+
+
+def publish_line(text):
+    """Single entry point for both text sources (clipboard + embedded Textractor):
+    clean the classic hook artifacts, drop consecutive repeats, broadcast."""
+    text = clean_hook_text((text or "").strip())
+    if not text or text == _last_published[0]:
+        return
+    _last_published[0] = text
+    broadcaster.publish(text)
+
+
+hooker = hook.Hooker(publish_line)
+
 
 def clean_hook_text(text):
     """Undo the two classic Textractor artifacts: the whole line emitted twice
@@ -145,11 +161,9 @@ def clipboard_monitor(paused_flag):
             if seq != last_seq:
                 last_seq = seq
                 text = get_clipboard_text()
-                if text:
-                    text = clean_hook_text(text)
                 if text and text != last_text:
                     last_text = text
-                    broadcaster.publish(text)
+                    publish_line(text)
         time.sleep(0.3)
 
 
@@ -560,6 +574,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"candidates": [], "error": str(e)}, 500)
         elif path == "/state":
             self._send_json({"paused": PAUSED.is_set()})
+        elif path == "/processes":
+            self._send_json({"available": hook.available(),
+                             "processes": hook.list_processes()})
+        elif path == "/hooks":
+            self._send_json(hooker.state())
         elif path == "/events":
             self._serve_events()
         elif path.startswith("/static/"):
@@ -567,9 +586,27 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send_bytes(b"Not found", "text/plain; charset=utf-8", 404)
 
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            return json.loads(raw or b"{}")
+        except Exception:
+            return {}
+
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/anki":
+        if parsed.path == "/attach":
+            pid = self._read_json_body().get("pid")
+            err = hooker.attach(int(pid)) if pid else "no pid"
+            self._send_json({"error": err, **hooker.state()}, 400 if err else 200)
+        elif parsed.path == "/detach":
+            hooker.detach()
+            self._send_json(hooker.state())
+        elif parsed.path == "/hookpick":
+            hooker.pick(self._read_json_body().get("key"))
+            self._send_json(hooker.state())
+        elif parsed.path == "/anki":
             # Proxy to AnkiConnect: the browser page can't call it directly
             # (AnkiConnect's CORS allowlist doesn't include this origin by default).
             length = int(self.headers.get("Content-Length", 0))
@@ -640,7 +677,10 @@ def main():
     ap = argparse.ArgumentParser(description="Down the Rabbit Hole - VN texthooker server")
     ap.add_argument("--port", type=int, default=3939)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--browser", action="store_true",
+                    help="open in the web browser instead of the app window")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="serve only; open nothing")
     args = ap.parse_args()
 
     if not os.path.isfile(DB_PATH):
@@ -656,18 +696,51 @@ def main():
 
     threading.Thread(target=clipboard_monitor, args=(PAUSED,), daemon=True).start()
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    class QuietServer(ThreadingHTTPServer):
+        def handle_error(self, request, client_address):
+            # WebView/browser tabs abort in-flight requests on reload — routine,
+            # not worth a stack trace. Anything else still prints.
+            import traceback
+            exc = sys.exception()
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+                return
+            traceback.print_exc()
+
+    server = QuietServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}/"
     print(f"Down the Rabbit Hole - running at {url}")
-    print("Clipboard monitoring is ON. Copy Japanese text (or hook a game with "
-          "Textractor) and it will appear in the browser.")
+    print("Text sources: Attach button (embedded Textractor) or clipboard (Textractor's "
+          "Copy to Clipboard extension).")
+
+    # Standalone app window (pywebview / Edge WebView2). Falls back to the browser
+    # when pywebview isn't installed or fails to open.
+    if not (args.browser or args.no_browser):
+        try:
+            import webview
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            webview.create_window("Down the Rabbit Hole", url,
+                                  width=1100, height=800, min_size=(420, 500))
+            webview.start()          # blocks until the window is closed
+            print("Window closed. Stopping.")
+            hooker.detach()
+            server.shutdown()
+            return
+        except ImportError:
+            print("(pywebview not installed — falling back to the browser. "
+                  "For the app window:  python -m pip install pywebview)")
+            args.browser = True
+        except Exception as e:
+            print(f"(app window failed: {e} — falling back to the browser)")
+            args.browser = True
+
     print("Press Ctrl+C to stop.")
-    if not args.no_browser:
+    if args.browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping.")
+        hooker.detach()
         server.shutdown()
 
 

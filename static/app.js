@@ -608,6 +608,121 @@ document.addEventListener("click", e => {
   if (pinned && !e.target.closest(".token.word") && !e.target.closest("#popup")) unpin();
 });
 
+/* ---- embedded Textractor: attach panel ---------------------------------- */
+const attachBtn = document.getElementById("attachBtn");
+const hookPanel = document.getElementById("hookPanel");
+const hookMsg = document.getElementById("hookMsg");
+const procList = document.getElementById("procList");
+const hookList = document.getElementById("hookList");
+const detachBtn = document.getElementById("detachBtn");
+let hookPoll = null;
+
+async function jpost(url, body) {
+  return (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                             body: JSON.stringify(body || {}) })).json();
+}
+
+function renderHookState(st) {
+  detachBtn.classList.toggle("hidden", !st.attached);
+  attachBtn.classList.toggle("active", !!(st.attached && st.picked));
+  if (!st.attached) {
+    hookMsg.textContent = "Pick the game to hook (it must already be running):";
+    hookList.innerHTML = "";
+    // A poll answered while we were still attached can land late and wipe the
+    // process list a detach just refilled — refill whenever it's missing.
+    if (!procList.children.length) refreshProcesses();
+    return;
+  }
+  procList.innerHTML = "";
+  attachBtn.title = "Attached: " + (st.exe || st.pid);
+  if (!st.hooks.length) {
+    hookMsg.textContent = `Attached to ${st.exe}. Advance the game a line or two — ` +
+                          "text channels appear here as they speak.";
+    hookList.innerHTML = "";
+    return;
+  }
+  hookMsg.textContent = st.picked
+    ? `Attached to ${st.exe} — streaming. Pick another channel if the text looks wrong:`
+    : `Attached to ${st.exe}. Click the channel showing the game's dialogue:`;
+  hookList.innerHTML = "";
+  st.hooks.forEach(h => {
+    const b = document.createElement("button");
+    b.className = "hook-item" + (h.key === st.picked ? " active" : "");
+    const name = document.createElement("span");
+    name.className = "hook-name";
+    name.textContent = (h.key.split(":").pop() || h.key) + " ×" + h.count;
+    const prev = document.createElement("span");
+    prev.className = "hook-prev";
+    prev.textContent = h.last || "(no text yet)";
+    b.append(name, prev);
+    b.addEventListener("click", async () => renderHookState(await jpost("/hookpick", { key: h.key })));
+    hookList.appendChild(b);
+  });
+}
+
+let procFetching = false;
+async function refreshProcesses() {
+  if (procFetching) return;
+  procFetching = true;
+  let j;
+  try { j = await (await fetch("/processes")).json(); }
+  finally { procFetching = false; }
+  procList.innerHTML = "";
+  if (!j.available) {
+    hookMsg.textContent = "Textractor isn't downloaded yet. Run:  python setup.py --textractor";
+    return;
+  }
+  j.processes.forEach(p => {
+    const b = document.createElement("button");
+    b.className = "proc-item";
+    const name = document.createElement("b");
+    name.textContent = p.exe || ("pid " + p.pid);
+    const title = document.createElement("span");
+    title.textContent = p.title;
+    b.append(name, title);
+    b.addEventListener("click", async () => {
+      hookMsg.textContent = "Attaching…";
+      const st = await jpost("/attach", { pid: p.pid });
+      if (st.error) hookMsg.textContent = "Could not attach: " + st.error;
+      else renderHookState(st);
+    });
+    procList.appendChild(b);
+  });
+}
+
+function toggleHookPanel(show) {
+  const hidden = show === undefined ? !hookPanel.classList.contains("hidden") : !show;
+  hookPanel.classList.toggle("hidden", hidden);
+  clearInterval(hookPoll);
+  if (!hidden) {
+    (async () => {
+      const st = await (await fetch("/hooks")).json();
+      renderHookState(st);
+      if (!st.attached) refreshProcesses();
+    })();
+    hookPoll = setInterval(async () => {
+      renderHookState(await (await fetch("/hooks")).json());
+    }, 1000);
+  }
+}
+attachBtn.addEventListener("click", e => { e.stopPropagation(); toggleHookPanel(); });
+document.getElementById("hookClose").addEventListener("click", () => toggleHookPanel(false));
+detachBtn.addEventListener("click", async () => {
+  renderHookState(await jpost("/detach"));
+  refreshProcesses();
+});
+document.addEventListener("click", e => {
+  if (!hookPanel.classList.contains("hidden") && !hookPanel.contains(e.target) && e.target !== attachBtn)
+    toggleHookPanel(false);
+});
+// reflect an existing attachment on load (e.g. after a reload mid-session)
+(async () => {
+  try {
+    const st = await (await fetch("/hooks")).json();
+    if (st.attached) renderHookState(st);
+  } catch (_) {}
+})();
+
 /* ---- clipboard stream (SSE) ------------------------------------------- */
 function connectStream() {
   const es = new EventSource("/events");

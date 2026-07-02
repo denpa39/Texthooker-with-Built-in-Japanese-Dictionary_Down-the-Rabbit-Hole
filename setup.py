@@ -46,6 +46,9 @@ INNOCENT_URL = ("https://raw.githubusercontent.com/MarvNC/yomitan-dictionaries/"
 # Kanjium pitch-accent data (term \t reading \t accent), CC BY-SA 4.0.
 KANJIUM_URL = ("https://raw.githubusercontent.com/mifunetoshiro/kanjium/"
                "master/data/source_files/raw/accents.txt")
+# Textractor (GPL-3.0) — its CLI is embedded so the app can hook games directly.
+TEXTRACTOR_API = "https://api.github.com/repos/Artikash/Textractor/releases/latest"
+TEXTRACTOR_DIR = os.path.join(BASE_DIR, "textractor")
 UA = {"User-Agent": "texthooker-setup/1.0"}
 
 
@@ -81,7 +84,7 @@ def fetch_bytes(url, headers=None):
 
 # --------------------------------------------------------------------------- #
 def setup_kuromoji(force=False):
-    print("[1/4] kuromoji tokenizer")
+    print("[1/6] kuromoji tokenizer")
     js_path = os.path.join(KUROMOJI_DIR, "kuromoji.js")
     if force or not os.path.isfile(js_path):
         download(f"{KUROMOJI_CDN}/build/kuromoji.js", js_path)
@@ -344,7 +347,7 @@ def build_db(jmdict_json_bytes, vn_freq=None):
 
 
 def setup_dictionary(common, force=False, freq_zip=None, innocent=False):
-    print("[2/4] JMdict dictionary + frequency")
+    print("[2/6] JMdict dictionary + frequency")
     if not force and os.path.isfile(DB_PATH):
         print("  dict.sqlite already present (use --force to rebuild)\n")
         return
@@ -431,7 +434,7 @@ def build_names(js_bytes):
 def setup_pitch(force=False):
     """Kanjium pitch-accent table: pitch(term, reading, accent). Optional —
     lookups work without it; the popup just shows no accent numbers."""
-    print("[4/4] pitch accent (Kanjium)")
+    print("[4/6] pitch accent (Kanjium)")
     if not os.path.isfile(DB_PATH):
         print("  build the dictionary first.\n")
         return
@@ -470,8 +473,63 @@ def setup_pitch(force=False):
         con.close()
 
 
+def setup_textractor(force=False):
+    """Download the Textractor zip and extract it into textractor/ so the app can
+    spawn TextractorCLI.exe itself (the in-app 'Attach' button)."""
+    print("[5/6] Textractor (embedded game hooking)")
+    if not force and (os.path.isfile(os.path.join(TEXTRACTOR_DIR, "x64", "TextractorCLI.exe"))
+                      or os.path.isfile(os.path.join(TEXTRACTOR_DIR, "x86", "TextractorCLI.exe"))):
+        print("  Textractor already present (use --force to redownload)\n")
+        return
+    try:
+        info = json.loads(fetch_bytes(TEXTRACTOR_API))
+        asset = next(a for a in info.get("assets", [])
+                     if a["name"].endswith(".zip"))
+        with tempfile.TemporaryDirectory() as tmp:
+            zpath = os.path.join(tmp, asset["name"])
+            print(f"  downloading {asset['name']}")
+            download(asset["browser_download_url"], zpath)
+            print("  extracting...")
+            with zipfile.ZipFile(zpath) as zf:
+                for m in zf.namelist():
+                    parts = m.replace("\\", "/").split("/")
+                    # strip the top-level "Textractor/" folder if the zip has one
+                    if parts and parts[0].lower().startswith("textractor"):
+                        parts = parts[1:]
+                    if not parts or not parts[-1]:
+                        continue
+                    dest = os.path.join(TEXTRACTOR_DIR, *parts)
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    with zf.open(m) as src, open(dest, "wb") as out:
+                        out.write(src.read())
+        print("  Textractor ready — use the Attach button in the app\n")
+    except Exception as e:
+        print(f"  Textractor unavailable ({e}) — the Attach button will explain; "
+              f"clipboard capture still works\n")
+
+
+def setup_pywebview():
+    """Best-effort install of pywebview for the standalone app window. The app
+    falls back to the browser without it, so a failure here is not fatal."""
+    print("[6/6] app window (pywebview)")
+    try:
+        import webview  # noqa: F401
+        print("  pywebview already installed\n")
+        return
+    except ImportError:
+        pass
+    try:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pywebview"],
+                              stdout=subprocess.DEVNULL)
+        print("  pywebview installed — the app opens in its own window\n")
+    except Exception as e:
+        print(f"  could not install pywebview ({e}) — the app will open in the "
+              f"browser instead\n")
+
+
 def setup_names(force=False):
-    print("[3/4] JMnedict names")
+    print("[3/6] JMnedict names")
     if not os.path.isfile(DB_PATH):
         print("  build the dictionary first.\n")
         return
@@ -510,9 +568,16 @@ def main():
     ap.add_argument("--innocent", action="store_true",
                     help="auto-download the Innocent Corpus VN/novel frequency list "
                          "(no manual step, but coarser than the jiten.moe VN list)")
+    ap.add_argument("--no-textractor", action="store_true",
+                    help="skip downloading Textractor (in-app game hooking)")
+    ap.add_argument("--textractor", action="store_true",
+                    help="only download Textractor (skip everything else)")
     args = ap.parse_args()
 
     print("Down the Rabbit Hole - setup\n" + "=" * 28)
+    if args.textractor:
+        setup_textractor(force=args.force)
+        return
     if not args.skip_kuromoji:
         setup_kuromoji(force=args.force)
     setup_dictionary(common=args.common, force=args.force, freq_zip=args.freq,
@@ -520,6 +585,9 @@ def main():
     if not args.no_names:
         setup_names(force=args.force)
     setup_pitch(force=args.force)
+    if not args.no_textractor:
+        setup_textractor(force=args.force)
+    setup_pywebview()
     print("Done!  Start the app with:  python server.py")
 
 
