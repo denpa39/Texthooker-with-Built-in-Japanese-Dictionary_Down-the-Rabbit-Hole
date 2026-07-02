@@ -107,7 +107,7 @@ def main():
     total += 1
     sc = server.scan("食べさせられた", "動詞", "タベサセラレタ", "食べる", "食べさせられた")
     trail = sc[0]["reasons"] if sc else []
-    if trail == ["causative", "passive/potential", "past"]:
+    if trail == ["causative", "potential or passive", "-た"]:
         print(f"PASS  trail order: {' › '.join(trail)}")
     else:
         print(f"FAIL  trail order: got {trail}")

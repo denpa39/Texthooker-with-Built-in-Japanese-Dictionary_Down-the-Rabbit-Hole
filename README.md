@@ -67,11 +67,29 @@ with `--freq`.
 
 ## Features
 
-- **Auto clipboard capture** over Server-Sent Events — text appears the moment it's copied.
+- **Auto clipboard capture** over Server-Sent Events — text appears the moment it's copied,
+  with the classic Textractor artifacts (whole line doubled, every character doubled)
+  cleaned automatically.
 - **Offline dictionary** built from JMdict (the standard free J–E dictionary). Works with no internet after setup.
 - **Smart longest-match scanning** — catches multi-word expressions and compounds the
   tokenizer splits (一日中, という), with a full de-inflector that also shows the
-  inflection trail (読んでいた → 読む · progressive › past).
+  inflection trail (読んでいた → 読む · -te form › -いる › past).
+- **Yomitan-grade de-inflection** — the rule table is ported from
+  [Yomitan](https://github.com/yomidevs/yomitan)'s Japanese transforms (850+ rules with
+  grammatical condition chaining), plus auxiliary chains it leaves to multi-word lookup
+  (〜てみる, 〜ていく, 〜てくれる, 〜にくい/やすい…). 食べさせられていた, わからん,
+  高くなさそう, お読みになります — all reach their dictionary form.
+- **Pitch accent** on every entry that has one (Kanjium data): ⬇0 = flat, ⬇n = downstep
+  after mora n.
+- **VN frequency chip** (№1,638) in the popup so you can tell at a glance whether a word
+  is worth mining; green = common in visual novels.
+- **Anki export** — the ★ button on any entry adds a card (word, reading + pitch,
+  meanings, source sentence) via [AnkiConnect](https://ankiweb.net/shared/info/2055492159).
+  Deck and note type are created automatically; just have Anki running.
+- **Known-word tracking** — pin a word and mark it known; known words dim in the reader
+  so unknown vocabulary stands out. Stored in your browser.
+- **Session persistence & export** — lines survive a page reload, and **Export** saves
+  the session as a .txt. A live counter shows characters read and reading speed (字/時).
 - **Tokenizer-anchored ranking** so the intended word comes first. It trusts kuromoji's
   own analysis of each token — part-of-speech (は = particle, not 羽 "feather"), reading
   (本【ほん】"book", not 本【もと】"origin"), dictionary form (居る "to be", not 射る
@@ -99,10 +117,12 @@ with `--freq`.
 | **Pause** / **Resume** | Stop/continue reading the clipboard |
 | **Furigana** | Show readings above kanji |
 | ▤ alignment icons | Text alignment — left, center, right, or justify |
-| **Theme** | Opens the Appearance panel (themes, colours, font, bold/italic) |
+| **Theme** | Opens the Appearance panel (themes, colours, font, bold/italic, spacing) |
 | A slider | Reader font size |
+| **Export** | Download the session as a .txt file |
 | **Undo** | Remove the most recent line |
 | **Clear** | Clear all lines (click twice to confirm) |
+| 字 counter | Characters read this session · reading speed (字/時) |
 
 ### Appearance panel
 
@@ -115,6 +135,7 @@ Click **Theme** to open it:
   tag, furigana) on top of the current theme.
 - **Font** — pick a font stack (sans, Gothic, Mincho serif, rounded, or monospace); use
   the toolbar's **A** slider for size.
+- **Spacing** — line height and furigana size sliders.
 - **B** / *I* — toggle bold or italic for the reader text.
 - **Reset to default** — clears every override back to the default theme.
 
@@ -164,3 +185,13 @@ python server.py --no-browser    # don't auto-open the browser
   dictionary still work on other platforms — paste text manually.
 - The dictionary database and downloaded tokenizer are not committed; run
   `setup.py` to generate them.
+- **Anki export** needs Anki running with the AnkiConnect add-on installed (code
+  `2055492159`). The first export creates a "Down the Rabbit Hole" deck and note type.
+
+## Data & licences
+
+- Definitions: **JMdict / JMnedict** (EDRDG licence).
+- De-inflection rules: ported from **Yomitan**'s Japanese transforms — **GPL-3.0**
+  (`deinflect_data.py`; if you redistribute this project, GPL-3.0 terms apply to it).
+- Pitch accent: **Kanjium** — CC BY-SA 4.0.
+- VN frequency: **jiten.moe** — CC BY-SA 4.0.

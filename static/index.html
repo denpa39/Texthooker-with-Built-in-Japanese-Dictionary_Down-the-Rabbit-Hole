@@ -11,6 +11,7 @@
 <header id="toolbar">
   <span class="brand"><span class="brand-text">Down&nbsp;the&nbsp;Rabbit&nbsp;Hole</span></span>
   <span id="status" class="status connecting" role="status" title="Connecting…" aria-label="Connecting"></span>
+  <span id="stats" class="stats" title="Characters read this session · reading speed"></span>
   <span class="spacer"></span>
   <button id="pauseBtn" title="Pause / resume clipboard capture">Pause</button>
   <button id="furiBtn" title="Toggle furigana readings">Furigana</button>
@@ -25,6 +26,7 @@
     <input id="fontRange" type="range" min="16" max="56" step="1" value="30" aria-label="Reader text size">
     <output id="fontVal">30</output>
   </label>
+  <button id="exportBtn" title="Download this session as a .txt file" aria-label="Export session">Export</button>
   <button id="clearBtn" title="Undo — remove the most recent line" aria-label="Undo last line">Undo</button>
   <button id="clearAllBtn" class="icon-btn" title="Clear all lines" aria-label="Clear all lines">Clear</button>
 </header>
@@ -37,6 +39,15 @@
   <div id="colorRow" class="colors"></div>
   <div class="set-label">Font (use the "A" slider for size)</div>
   <select id="fontSelect"></select>
+  <div class="set-label">Spacing</div>
+  <label class="set-slider">Line height
+    <input id="lineHeightRange" type="range" min="1.3" max="3" step="0.1" aria-label="Line height">
+    <output id="lineHeightVal"></output>
+  </label>
+  <label class="set-slider">Furigana size
+    <input id="furiRange" type="range" min="0.3" max="0.7" step="0.05" aria-label="Furigana size">
+    <output id="furiVal"></output>
+  </label>
   <div class="style-toggles">
     <button id="boldToggle" class="style-toggle" title="Toggle bold reader text" aria-pressed="false"><b>B</b></button>
     <button id="italicToggle" class="style-toggle" title="Toggle italic reader text" aria-pressed="false"><i>I</i></button>
@@ -50,7 +61,8 @@
 
 <div id="hint" class="hint">
   Copy Japanese text (or hook a game with <b>Textractor</b> → Clipboard output) and it
-  appears here. <b>Hover</b> a word for its meaning — <b>click</b> to keep it open.
+  appears here. <b>Hover</b> a word for its meaning — <b>click</b> to keep it open
+  (<b>wheel</b> scrolls the popup, <b>Esc</b> closes it).
 </div>
 
 <script src="/static/kuromoji/kuromoji.js"></script>

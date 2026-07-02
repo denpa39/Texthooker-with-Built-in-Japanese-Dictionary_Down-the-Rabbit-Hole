@@ -31,7 +31,7 @@
     "Maru":           '"Kosugi Maru", "Yu Gothic UI", "Hiragino Maru Gothic ProN", sans-serif',
     "Monospace":      '"Cascadia Code", "Consolas", "MS Gothic", monospace',
   };
-  const DEFAULTS = { preset: "Alice", colors: {}, font: "Default (Sans)", fontSize: 30, align: "left", bold: false, italic: false };
+  const DEFAULTS = { preset: "Alice", colors: {}, font: "Default (Sans)", fontSize: 30, align: "left", bold: false, italic: false, lineHeight: 1.9, furiSize: 0.45 };
   const ALIGNS = ["left", "center", "right", "justify"];
   // Per alignment: the block's [left, right] margins. "auto" pushes the block to the
   // opposite edge — so left → flush left, right → flush right, center/justify → centred.
@@ -81,6 +81,8 @@
     root.setProperty("--line-mr", mr);
     root.setProperty("--font-weight", s.bold ? "700" : "400");
     root.setProperty("--font-style", s.italic ? "italic" : "normal");
+    root.setProperty("--line-height", String(s.lineHeight || 1.9));
+    root.setProperty("--furi-size", (s.furiSize || 0.45) + "em");
   }
 
   let settings = load();
@@ -159,6 +161,18 @@
       });
     }
 
+    // spacing sliders (line height / furigana size)
+    const lhRange = document.getElementById("lineHeightRange");
+    const lhVal = document.getElementById("lineHeightVal");
+    const furiRange = document.getElementById("furiRange");
+    const furiVal = document.getElementById("furiVal");
+    if (lhRange) lhRange.addEventListener("input", () => {
+      settings.lineHeight = +lhRange.value; commit();
+    });
+    if (furiRange) furiRange.addEventListener("input", () => {
+      settings.furiSize = +furiRange.value; commit();
+    });
+
     // text-alignment segmented control (lives in the toolbar, not the panel, but
     // persists through the same settings object).
     const alignSeg = document.getElementById("alignSeg");
@@ -200,6 +214,8 @@
       fontSel.value = settings.font;
       if (sizeRange) sizeRange.value = settings.fontSize;
       showSize();
+      if (lhRange) { lhRange.value = settings.lineHeight; lhVal.textContent = Number(settings.lineHeight).toFixed(1); }
+      if (furiRange) { furiRange.value = settings.furiSize; furiVal.textContent = Math.round(settings.furiSize * 100) + "%"; }
       if (alignSeg) alignSeg.querySelectorAll("button[data-align]").forEach(b =>
         b.classList.toggle("active", b.dataset.align === settings.align));
       if (boldToggle) boldToggle.setAttribute("aria-pressed", String(!!settings.bold));

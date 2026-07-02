@@ -20,6 +20,46 @@ let tokenizer = null;
 let showFurigana = false;
 let lookupCache = new Map();
 
+/* ---- known-word tracking (persisted) ----------------------------------- */
+const KNOWN_KEY = "vntex-known";
+let knownWords;
+try { knownWords = new Set(JSON.parse(localStorage.getItem(KNOWN_KEY)) || []); }
+catch (_) { knownWords = new Set(); }
+function saveKnown() {
+  try { localStorage.setItem(KNOWN_KEY, JSON.stringify([...knownWords])); } catch (_) {}
+}
+function refreshKnown(term) {
+  document.querySelectorAll(".token.word").forEach(sp => {
+    if (!term || sp.dataset.term === term)
+      sp.classList.toggle("known", knownWords.has(sp.dataset.term));
+  });
+}
+
+/* ---- session persistence + reading stats ------------------------------- */
+const SESSION_KEY = "vntex-session";
+let sessionChars = 0;    // characters read since this page loaded (drives 字/時)
+let sessionStart = 0;    // first line's timestamp this page-load
+let restoring = false;   // true while replaying saved lines (no save/stat churn)
+
+function savedLines() {
+  return [...linesEl.children].map(l => l.dataset.raw).filter(Boolean);
+}
+function saveSession() {
+  if (restoring) return;
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(savedLines())); } catch (_) {}
+}
+const statsEl = document.getElementById("stats");
+function bumpStats(text) {
+  if (restoring) return;
+  const chars = text.replace(/\s/g, "").length;
+  if (!sessionStart) sessionStart = Date.now();
+  sessionChars += chars;
+  const hours = (Date.now() - sessionStart) / 3600000;
+  const rate = hours > 0.005 ? Math.round(sessionChars / hours) : 0;
+  statsEl.textContent = sessionChars.toLocaleString() + "字" +
+                        (rate ? " · " + rate.toLocaleString() + "字/時" : "");
+}
+
 /* ---- POS abbreviation expansion (common JMdict tags) ------------------- */
 const POS = {
   "n": "noun", "pn": "pronoun", "adj-i": "い-adjective", "adj-na": "な-adjective",
@@ -47,7 +87,13 @@ const MISC = {
 const expandMisc = m => MISC[m] || m;
 
 /* ---- inflection-trail labels (raw de-inflection tags -> readable) ------- */
-const REASON = { "passive/potential": "passive or potential", "past/-te": "past or -te" };
+const REASON = {
+  "-た": "past", "-て": "-te form", "-ば": "conditional", "-たら": "conditional (tara)",
+  "-たり": "-tari", "-く": "adverbial", "-さ": "-sa nominal", "-ず": "without doing",
+  "-ぬ": "negative (archaic)", "-ん": "negative (casual)", "-ゃ": "contraction",
+  "-ちゃ": "contraction (-cha)", "continuative": "masu stem", "-まい": "won't/probably not",
+  "potential or passive": "potential or passive",
+};
 const expandReason = r => REASON[r] || r;
 const isDatedSense = s => (s.misc || []).some(m => m === "arch" || m === "obs" || m === "rare");
 
@@ -111,6 +157,7 @@ function buildSentence(text) {
       span.dataset.pos = t.pos || "";
       span.dataset.jreading = (t.reading && t.reading !== "*") ? t.reading : "";
       span.dataset.off = String((t.word_position || 1) - 1);  // start index in the line
+      if (knownWords.has(base)) span.classList.add("known");
 
       if (showFurigana && hasKanji(surface) && t.reading && t.reading !== "*") {
         const ruby = document.createElement("ruby");
@@ -133,6 +180,11 @@ function buildSentence(text) {
 function addLine(text) {
   text = (text || "").replace(/\r/g, "").trim();
   if (!text) return;
+  // The SSE stream replays the last line on every (re)connect; with the session
+  // restored from storage that replay would duplicate it. Consecutive identical
+  // lines can't come from the clipboard (the server dedupes), so skip them.
+  const last = linesEl.lastElementChild;
+  if (last && last.dataset.raw === text) return;
   hint.classList.add("gone");
 
   document.querySelectorAll(".line.latest").forEach(e => e.classList.remove("latest"));
@@ -153,7 +205,21 @@ function addLine(text) {
 
   // keep DOM bounded
   while (linesEl.children.length > 300) linesEl.removeChild(linesEl.firstChild);
+
+  bumpStats(text);
+  saveSession();
 }
+
+// Restore the previous session's lines (tokenizer-independent: rebuildSentences
+// re-renders them once kuromoji is ready).
+(function restoreSession() {
+  let lines;
+  try { lines = JSON.parse(localStorage.getItem(SESSION_KEY)) || []; } catch (_) { lines = []; }
+  if (!lines.length) return;
+  restoring = true;
+  lines.forEach(addLine);
+  restoring = false;
+})();
 
 /* ---- dictionary lookup + popup (longest-match scan) -------------------- */
 let pinned = false;
@@ -204,7 +270,66 @@ function renderSense(s, n) {
   return sense;
 }
 
-function renderCandidate(c) {
+/* ---- Anki export (via the server's /anki proxy to AnkiConnect) ---------- */
+const ANKI_DECK = "Down the Rabbit Hole";
+const ANKI_MODEL = "Down the Rabbit Hole";
+let ankiReady = false;
+
+async function anki(action, params) {
+  const r = await fetch("/anki", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, version: 6, params: params || {} }),
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j.result;
+}
+
+// Create our deck + note type once, so export works with zero Anki-side setup.
+async function ensureAnki() {
+  if (ankiReady) return;
+  const models = await anki("modelNames");
+  if (!models.includes(ANKI_MODEL)) {
+    await anki("createModel", {
+      modelName: ANKI_MODEL,
+      inOrderFields: ["Word", "Reading", "Meaning", "Sentence"],
+      cardTemplates: [{
+        Name: "Card 1",
+        Front: '<div style="font-size:40px">{{Word}}</div><div>{{Sentence}}</div>',
+        Back: '<div style="font-size:40px">{{Word}}</div>{{Reading}}<hr>{{Meaning}}<hr>{{Sentence}}',
+      }],
+    });
+  }
+  await anki("createDeck", { deck: ANKI_DECK });   // no-op if it exists
+  ankiReady = true;
+}
+
+async function addToAnki(c, sentence, btn) {
+  const entry = c.entry;
+  const word = (entry.k && entry.k[0]) || (entry.r && entry.r[0]) || c.matched;
+  const reading = (c.mr || (entry.r && entry.r[0]) || "") +
+                  (c.pitch != null ? ` [${c.pitch}]` : "");
+  const meaning = (entry.s || []).slice(0, 3)
+    .map((s, i) => (i + 1) + ". " + s.gloss.join("; ")).join("<br>");
+  try {
+    await ensureAnki();
+    await anki("addNote", {
+      note: {
+        deckName: ANKI_DECK, modelName: ANKI_MODEL,
+        fields: { Word: word, Reading: reading, Meaning: meaning, Sentence: sentence || "" },
+        options: { allowDuplicate: false },
+      },
+    });
+    btn.textContent = "✓";
+    btn.title = "added to Anki";
+  } catch (e) {
+    btn.textContent = "✗";
+    btn.title = "Anki: " + e.message;   // hover the button to see why
+  }
+  setTimeout(() => { btn.textContent = "★"; btn.title = "add to Anki"; }, 1800);
+}
+
+function renderCandidate(c, sentence) {
   const entry = c.entry;
   const div = document.createElement("div");
   div.className = "entry" + (c.kind === "name" ? " name" : "");
@@ -235,6 +360,22 @@ function renderCandidate(c) {
   const readingShown = c.mr || (entry.r && entry.r[0]);
   if (!allUk && hasKanji && readingShown) {
     head.appendChild(plainReading(readingShown));
+  }
+  // pitch-accent chip (Kanjium): 0 = heiban, n = downstep after mora n
+  if (c.pitch != null) {
+    const p = document.createElement("span");
+    p.className = "pitch";
+    p.textContent = "⬇" + String(c.pitch).split(",").join("·");
+    p.title = "pitch accent (0 = flat, n = drop after mora n)";
+    head.appendChild(p);
+  }
+  // VN-frequency chip: how common this word is in visual novels
+  if (typeof entry.vr === "number") {
+    const f = document.createElement("span");
+    f.className = "freq" + (entry.vr <= 6600 ? " hot" : "");
+    f.textContent = "№" + entry.vr.toLocaleString();
+    f.title = "visual-novel frequency rank" + (entry.vr <= 6600 ? " (common — worth learning)" : "");
+    head.appendChild(f);
   }
   if (c.kind === "name") {
     const tag = document.createElement("span");
@@ -270,6 +411,19 @@ function renderCandidate(c) {
   jisho.rel = "noopener";
   jisho.addEventListener("click", ev => ev.stopPropagation());
   head.appendChild(jisho);
+
+  if (c.kind !== "name") {
+    const star = document.createElement("button");
+    star.className = "mini";
+    star.textContent = "★";
+    star.title = "add to Anki";
+    star.setAttribute("aria-label", "add " + primary + " to Anki");
+    star.addEventListener("click", ev => {
+      ev.stopPropagation();
+      addToAnki(c, sentence, star);
+    });
+    head.appendChild(star);
+  }
   div.appendChild(head);
 
   // "also written": for a kana-headword (all-uk) entry surface the kanji form(s).
@@ -333,7 +487,24 @@ async function showScanPopup(target) {
     e.textContent = `No entry for 「${target.dataset.surface || target.dataset.term}」`;
     popup.appendChild(e);
   } else {
-    cands.forEach(c => popup.appendChild(renderCandidate(c)));
+    cands.forEach(c => popup.appendChild(renderCandidate(c, line.dataset.raw)));
+  }
+  // Pinned popup: mark the hovered word known/unknown (known words dim in the reader).
+  if (pinned) {
+    const term = target.dataset.term;
+    const kb = document.createElement("button");
+    kb.className = "known-btn" + (knownWords.has(term) ? " on" : "");
+    kb.textContent = knownWords.has(term) ? "✓ known — click to unmark" : "mark 「" + term + "」 as known";
+    kb.addEventListener("click", ev => {
+      ev.stopPropagation();
+      if (knownWords.has(term)) knownWords.delete(term);
+      else knownWords.add(term);
+      saveKnown();
+      refreshKnown(term);
+      kb.classList.toggle("on", knownWords.has(term));
+      kb.textContent = knownWords.has(term) ? "✓ known — click to unmark" : "mark 「" + term + "」 as known";
+    });
+    popup.appendChild(kb);
   }
   // Peek footer: teach the two least-discoverable features (and signal scrollability).
   let foot = null;
@@ -494,6 +665,7 @@ document.getElementById("clearBtn").addEventListener("click", () => {
   } else {
     hint.classList.remove("gone");  // back to empty state
   }
+  saveSession();
 });
 
 // Clear all lines — asks once (inline) before wiping everything.
@@ -518,6 +690,20 @@ clearAllBtn.addEventListener("click", () => {
   if (!popup.classList.contains("hidden")) unpin();
   linesEl.innerHTML = "";
   hint.classList.remove("gone");
+  saveSession();
+});
+
+// Export the session as a plain-text file, one line per hooked line.
+document.getElementById("exportBtn").addEventListener("click", () => {
+  const lines = savedLines();
+  if (!lines.length) return;
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-");
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "rabbit-hole-" + stamp + ".txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
 });
 
 // Appearance (theme / colours / font / text size) lives in settings.js, which

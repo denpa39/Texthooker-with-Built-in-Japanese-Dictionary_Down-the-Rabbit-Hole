@@ -44,6 +44,8 @@
   --font-weight: 400;   /* reader bold toggle (settings panel) */
   --font-style: normal; /* reader italic toggle (settings panel) */
   --text-align: left;   /* reader text alignment (toolbar segment) */
+  --line-height: 1.9;   /* reader line height (settings panel) */
+  --furi-size: .45em;   /* furigana size relative to the reader text (settings panel) */
 
   /* Connection-status dot — fixed traffic-light colours, not theme-derived.
      A status indicator needs to read the same way in every theme. */
@@ -233,7 +235,7 @@ body {
   font-size: var(--font-size);
   font-weight: var(--font-weight);
   font-style: var(--font-style);
-  line-height: 1.9;
+  line-height: var(--line-height);
 }
 .line {
   width: fit-content;     /* hug the sentence so the marker tracks text length… */
@@ -261,7 +263,7 @@ body {
 .line.latest .token.word:hover,
 .line.latest .token.word:focus-visible { background: var(--on-accent); color: var(--accent); }
 
-ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
+ruby rt { font-size: var(--furi-size); color: var(--furigana); user-select: none; }
 /* --furigana is tinted for the page background; on the solid-filled latest line
    that tint is unreadable, so tint against the chip's own on-accent/accent pair. */
 .line.latest ruby rt { color: color-mix(in srgb, var(--on-accent) 80%, var(--accent)); }
@@ -270,7 +272,7 @@ ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
 .popup {
   position: fixed;
   z-index: 100;
-  max-width: 440px;
+  max-width: min(440px, calc(100vw - 20px));
   max-height: 60vh;
   overflow-y: auto;
   background: var(--bg);
@@ -306,6 +308,35 @@ ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
 /* scan-popup extras: inflection trail, name tag, copy/jisho, pin */
 .entry .inflect { font-size: 12px; font-style: italic; color: var(--accent); margin-bottom: 3px; }
 .entry.name .hw { color: var(--accent); }
+
+/* pitch-accent + VN-frequency chips in the entry header */
+.entry .pitch {
+  font-size: 11px; color: var(--accent-2);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, var(--bg));
+  border-radius: 3px; padding: 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+.entry .freq {
+  font-size: 10px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  font-variant-numeric: tabular-nums;
+}
+.entry .freq.hot { color: var(--pos); border-color: color-mix(in srgb, var(--pos) 50%, var(--bg)); }
+
+/* pinned-popup footer: mark the hovered word known/unknown */
+.known-btn {
+  display: block; width: 100%; margin-top: 10px;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 3px;
+  padding: 6px; cursor: pointer; font-size: 12px;
+  transition: border-color .15s, color .15s;
+}
+.known-btn:hover { border-color: var(--pos); color: var(--pos); }
+.known-btn.on { color: var(--pos); border-color: color-mix(in srgb, var(--pos) 55%, var(--bg)); }
+
+/* words the user marked as known recede so unknown words stand out */
+.token.word.known { opacity: .58; }
+.token.word.known:hover, .token.word.known:focus-visible { opacity: 1; }
 
 .entry .name-tag {
   font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
@@ -352,6 +383,18 @@ ruby rt { font-size: .45em; color: var(--furigana); user-select: none; }
 }
 /* Clear-all asks once before wiping everything. */
 #clearAllBtn.confirm { color: var(--danger); border-color: var(--danger); }
+
+/* Session stats (characters read · reading speed) next to the status dot. */
+.stats {
+  font-size: 11px; letter-spacing: .02em;
+  color: color-mix(in srgb, var(--on-accent) 80%, var(--accent));
+  font-variant-numeric: tabular-nums;
+}
+
+/* Spacing sliders in the Appearance panel. */
+.set-slider { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); }
+.set-slider input[type="range"] { flex: 1; accent-color: var(--accent); min-width: 0; }
+.set-slider output { min-width: 3.4ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 /* Font-size numeric readout next to the A slider. */
 .fontctl output { min-width: 2.6ch; text-align: right; font-variant-numeric: tabular-nums; }
 

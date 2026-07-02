@@ -1,214 +1,108 @@
 """
-Compact Japanese de-inflector (Yomitan-style).
+Japanese de-inflector using Yomitan's transform table (see deinflect_data.py).
 
 Given an inflected surface form, returns candidate dictionary forms together with
 the chain of inflections that produced them. It deliberately *over-generates*:
 the dictionary lookup that consumes these candidates filters out non-words, so a
 missing rule only ever means a missed result, never a wrong one.
 
-    deinflect("食べさせられた") -> {"食べる": ["causative","passive","past"], ...}
+    deinflect("食べさせられた") -> {"食べる": ["causative", "-た"], ...}
+
+Each rule carries grammatical pre/post conditions (bitmask over verb/adjective
+classes), so chains stay grammatical: 〜ば can only peel off a verb form, and its
+output is marked "godan/ichidan dictionary form" for the next rule to check.
 """
 
 from collections import deque
 
-# godan stem-row -> dictionary-form ending
-_A = {"か": "く", "が": "ぐ", "さ": "す", "た": "つ", "な": "ぬ", "ば": "ぶ", "ま": "む", "ら": "る", "わ": "う"}
-_I = {"き": "く", "ぎ": "ぐ", "し": "す", "ち": "つ", "に": "ぬ", "び": "ぶ", "み": "む", "り": "る", "い": "う"}
-_O = {"こ": "く", "ご": "ぐ", "そ": "す", "と": "つ", "の": "ぬ", "ぼ": "ぶ", "も": "む", "ろ": "る", "お": "う"}
-_E = {"け": "く", "げ": "ぐ", "せ": "す", "て": "つ", "ね": "ぬ", "べ": "ぶ", "め": "む", "れ": "る", "え": "う"}
+from deinflect_data import RULES, COND_MASK
+
+_M = COND_MASK
+# Auxiliary-verb chains and suffixes Yomitan leaves to its multi-word scanner
+# (it matches みる/いく as separate words); we deinflect single tokens, so peel
+# them explicitly. Output of a て-rule is condition "-て" so the -て transform
+# can finish the job; suffixes that expose the masu stem output 0 (unrestricted)
+# so the "continuative" rules apply next.
+_SUPPLEMENT = [
+    ("s", "てみる", "て", _M["v1"], _M["-て"], "〜てみる (try)"),
+    ("s", "でみる", "で", _M["v1"], _M["-て"], "〜てみる (try)"),
+    ("s", "ていく", "て", _M["v5"], _M["-て"], "〜ていく (go on)"),
+    ("s", "でいく", "で", _M["v5"], _M["-て"], "〜ていく (go on)"),
+    ("s", "てくる", "て", _M["vk"], _M["-て"], "〜てくる (come to)"),
+    ("s", "でくる", "で", _M["vk"], _M["-て"], "〜てくる (come to)"),
+    ("s", "てくれる", "て", _M["v1"], _M["-て"], "〜てくれる (for me)"),
+    ("s", "でくれる", "で", _M["v1"], _M["-て"], "〜てくれる (for me)"),
+    ("s", "てあげる", "て", _M["v1"], _M["-て"], "〜てあげる (for someone)"),
+    ("s", "であげる", "で", _M["v1"], _M["-て"], "〜てあげる (for someone)"),
+    ("s", "てもらう", "て", _M["v5"], _M["-て"], "〜てもらう (have done)"),
+    ("s", "でもらう", "で", _M["v5"], _M["-て"], "〜てもらう (have done)"),
+    ("s", "てある", "て", _M["v5"], _M["-て"], "〜てある (has been done)"),
+    ("s", "である", "で", _M["v5"], _M["-て"], "〜てある (has been done)"),
+    ("s", "ておる", "て", _M["v5"], _M["-て"], "〜ておる (humble progressive)"),
+    ("s", "でおる", "で", _M["v5"], _M["-て"], "〜ておる (humble progressive)"),
+    ("s", "にくい", "", _M["adj-i"], 0, "〜にくい (hard to)"),
+    ("s", "やすい", "", _M["adj-i"], 0, "〜やすい (easy to)"),
+    ("s", "づらい", "", _M["adj-i"], 0, "〜づらい (hard to)"),
+    ("s", "がたい", "", _M["adj-i"], 0, "〜がたい (hard to)"),
+    ("s", "ないで", "ない", 0, _M["adj-i"], "negative -te"),
+    ("s", "なさそう", "ない", 0, _M["adj-i"], "〜なさそう (seems not)"),
+    ("s", "なくなる", "ない", 0, _M["adj-i"], "〜なくなる (stop being)"),
+    ("s", "さそう", "い", 0, _M["adj-i"], "〜そう (seems)"),
+]
+
+# Bucket rules by the last character of their inflected suffix, so each step only
+# tries the small slice of the 850+ rules that could possibly match.
+_BY_LAST = {}
+for _r in RULES + _SUPPLEMENT:
+    _BY_LAST.setdefault(_r[1][-1], []).append(_r)
 
 
-def _build_rules():
-    R = []
+def deinflect(word, max_depth=6):
+    """Return {dictionary_form: [inflection reasons]} reachable from `word`.
 
-    def add(a, b, reason):
-        R.append((a, b, reason))
-
-    # ---- progressive: strip the いる / てる contraction down to the て-form ----
-    for a, b in (("ている", "て"), ("でいる", "で"), ("ていた", "て"), ("でいた", "で"),
-                 ("てる", "て"), ("でる", "で"), ("てた", "て"), ("でた", "で"),
-                 ("ています", "て"), ("でいます", "で")):
-        add(a, b, "progressive")
-
-    # ---- て-form and plain past ----
-    for a in ("って", "った"):
-        for u in ("う", "つ", "る"):
-            add(a, u, "past/-te")
-    for a, u in (("いて", "く"), ("いた", "く"), ("いで", "ぐ"), ("いだ", "ぐ"),
-                 ("んで", "ぶ"), ("んだ", "ぶ"), ("んで", "む"), ("んだ", "む"),
-                 ("んで", "ぬ"), ("んだ", "ぬ")):
-        add(a, u, "past/-te")
-    for a in ("して", "した"):
-        add(a, "す", "past/-te")
-        add(a, "する", "past/-te")
-    add("て", "る", "-te")
-    add("た", "る", "past")
-    for a, b in (("行って", "行く"), ("行った", "行く"), ("いって", "いく"), ("いった", "いく"),
-                 ("来て", "来る"), ("来た", "来る"), ("きて", "くる"), ("きた", "くる")):
-        add(a, b, "past/-te")
-
-    # ---- polite (reduce to ます, then ます -> dict) ----
-    add("ませんでした", "ました", "negative")
-    add("ません", "ます", "negative")
-    add("ました", "ます", "past")
-    add("ましょう", "ます", "volitional")
-    add("まして", "ます", "-te")
-    add("ます", "る", "polite")
-    add("します", "する", "polite")
-    add("します", "す", "polite")
-    for i, u in _I.items():
-        add(i + "ます", u, "polite")
-
-    # ---- bare continuative / masu-stem (連用形): 振り乱し -> 振り乱す, 読み -> 読む ----
-    for i, u in _I.items():
-        add(i, u, "continuative")
-
-    # ---- negative ----
-    add("なかった", "ない", "past")
-    add("なくて", "ない", "-te")
-    add("なければ", "ない", "conditional")
-    add("なきゃ", "ない", "conditional")
-    add("なくちゃ", "ない", "conditional")
-    add("なく", "ない", "adverbial")
-    add("ないで", "ない", "-te")
-    add("ない", "る", "negative")
-    for a, u in _A.items():
-        add(a + "ない", u, "negative")
-    add("しない", "する", "negative")
-    add("こない", "くる", "negative")
-
-    # ---- passive / potential / causative ----
-    add("られる", "る", "passive/potential")
-    add("させる", "る", "causative")
-    add("させる", "する", "causative")
-    add("られる", "くる", "passive/potential")
-    for a, u in _A.items():
-        add(a + "れる", u, "passive")
-        add(a + "せる", u, "causative")
-    for e, u in _E.items():           # godan potential 行ける -> 行く
-        add(e + "る", u, "potential")
-    add("れる", "る", "potential")
-
-    # ---- volitional / conditional ----
-    add("よう", "る", "volitional")
-    for o, u in _O.items():
-        add(o + "う", u, "volitional")
-    add("しよう", "する", "volitional")
-    add("こよう", "くる", "volitional")
-    add("れば", "る", "conditional")
-    for e, u in _E.items():
-        add(e + "ば", u, "conditional")
-    add("たら", "た", "conditional")
-    add("だら", "だ", "conditional")
-    add("たり", "た", "-tari")
-    add("だり", "だ", "-tari")
-    add("ろ", "る", "imperative")          # ichidan: 食べろ -> 食べる
-
-    # ---- desire / colloquial ----
-    add("たい", "る", "desire")
-    for i, u in _I.items():
-        add(i + "たい", u, "desire")
-    add("たがる", "る", "desire")
-    for a, b in (("ちゃう", "て"), ("ちゃった", "て"), ("ちゃって", "て"),
-                 ("じゃう", "で"), ("じゃった", "で"), ("じゃって", "で")):
-        add(a, b, "colloquial")
-    add("とく", "て", "colloquial")
-    add("どく", "で", "colloquial")
-
-    # ---- い-adjectives ----
-    add("かった", "い", "past")
-    add("くない", "い", "negative")
-    add("くて", "い", "-te")
-    add("ければ", "い", "conditional")
-    add("く", "い", "adverbial")
-    add("さ", "い", "nominal")
-
-    # ---- literary / casual negative ず・ぬ・ん (行かず, 知らぬ, わからん, 食べん) ----
-    add("ず", "る", "negative")          # ichidan: 食べず -> 食べる
-    add("ぬ", "る", "negative")
-    add("ん", "る", "negative")
-    for a, u in _A.items():
-        add(a + "ず", u, "negative")      # godan: 行かず -> 行く
-        add(a + "ぬ", u, "negative")
-        add(a + "ん", u, "negative")      # わからん, 行かん
-    for irr, base in (("せず", "する"), ("せぬ", "する"), ("せん", "する"),
-                      ("こず", "くる"), ("こぬ", "くる")):
-        add(irr, base, "negative")
-
-    # ---- causative-passive contraction 〜される (godan): 読まされる -> 読む ----
-    for a, u in _A.items():
-        add(a + "される", u, "causative-passive")
-
-    # ---- 〜そう (looks like / seems): 高そう, 食べそう, 降りそう ----
-    add("そう", "い", "appearance")       # い-adjective stem
-    add("そう", "る", "appearance")       # ichidan stem
-    for i, u in _I.items():
-        add(i + "そう", u, "appearance")   # godan continuative stem
-
-    # ---- 〜すぎる (too ~): 高すぎる, 食べすぎる, 飲みすぎる ----
-    add("すぎる", "い", "excess")
-    add("すぎる", "る", "excess")
-    for i, u in _I.items():
-        add(i + "すぎる", u, "excess")
-
-    # ---- 〜なさい (polite imperative): 食べなさい, 読みなさい ----
-    add("なさい", "る", "imperative")
-    for i, u in _I.items():
-        add(i + "なさい", u, "imperative")
-
-    # ---- 〜なくなる (come to stop ~ing): 食べなくなる, 飲まなくなる ----
-    add("なくなる", "る", "negative")
-    for a, u in _A.items():
-        add(a + "なくなる", u, "negative")
-
-    # ---- い-adjective presumptive / polite negative ----
-    add("かろう", "い", "presumptive")            # 高かろう -> 高い
-    add("くありません", "い", "negative")          # 高くありません -> 高い
-    add("くありませんでした", "い", "negative")
-    add("くございません", "い", "negative")
-    add("くないです", "い", "negative")
-    add("くなかったです", "い", "negative")
-
-    # ---- casual long-vowel adjectives: trailing ー -> え (うぜー -> うぜえ, a headword) ----
-    add("ー", "え", "colloquial")
-    for cas, base in (("でけえ", "でかい"), ("つええ", "つよい"),
-                      ("わりい", "わるい"), ("うめえ", "うまい")):
-        add(cas, base, "colloquial")
-    return R
-
-
-_RULES = _build_rules()
-
-
-# i/e-row hiragana an ichidan verb stem can end in (食べ, 考え, 起き, 見...)
-_ICHIDAN_STEM = set("いきしちにひみりゐぎじぢびぴえけせてねへめれゑげぜでべぺ")
-
-
-def deinflect(word, max_depth=10):
-    """Return {dictionary_form: [inflection reasons]} reachable from `word`."""
+    Reasons are listed outermost-first (the order the rules were peeled off);
+    the caller reverses them for display. Conditions start unrestricted (0) and
+    each applied rule constrains what may apply next, per Yomitan's semantics.
+    """
     results = {word: []}
-    queue = deque([(word, [])])
-    # ichidan bare continuative: 考え -> 考える, 食べ -> 食べる
-    if word and word[-1] in _ICHIDAN_STEM:
-        results[word + "る"] = ["continuative"]
-        queue.append((word + "る", ["continuative"]))
+    visited = {(word, 0)}
+    queue = deque([(word, 0, [])])
     while queue:
-        cur, reasons = queue.popleft()
+        cur, conds, reasons = queue.popleft()
         if len(reasons) >= max_depth:
             continue
-        for sin, sout, label in _RULES:
-            if len(cur) >= len(sin) and cur.endswith(sin):  # >= so whole-word irregulars fire
+        for kind, sin, sout, m_in, m_out, label in _BY_LAST.get(cur[-1], ()):
+            if conds != 0 and not (conds & m_in):
+                continue
+            if kind == "w":
+                if cur != sin:
+                    continue
+                nxt = sout
+            else:
+                if len(cur) < len(sin) or not cur.endswith(sin):
+                    continue
                 nxt = cur[: len(cur) - len(sin)] + sout
-                if nxt and nxt != cur and nxt not in results:
-                    newr = reasons + [label]
-                    results[nxt] = newr
-                    queue.append((nxt, newr))
+            if not nxt:
+                continue
+            state = (nxt, m_out)
+            if state in visited:
+                continue
+            visited.add(state)
+            newr = reasons + [label]
+            if nxt not in results:          # BFS -> first hit is the shortest chain
+                results[nxt] = newr
+            queue.append((nxt, m_out, newr))
     return results
 
 
 if __name__ == "__main__":
     import sqlite3
     import os
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     db = sqlite3.connect(os.path.join(os.path.dirname(__file__), "dict.sqlite"))
 
     def in_dict(term):
@@ -222,6 +116,12 @@ if __name__ == "__main__":
         "食べてる": "食べる", "食べちゃった": "食べる", "高かった": "高い",
         "美味しくない": "美味しい", "早く": "早い", "行こう": "行く",
         "読ませる": "読む", "見られる": "見る", "帰れば": "帰る", "泣かないで": "泣く",
+        # coverage added with the Yomitan rule table:
+        "行け": "行く", "来い": "来る", "しろ": "する", "食べてみる": "食べる",
+        "読んでしまった": "読む", "書いておく": "書く", "食べていく": "食べる",
+        "分かりにくい": "分かる", "読みやすい": "読む", "食べたがっている": "食べる",
+        "高くなさそう": "高い", "行かなきゃ": "行く", "見せてくれ": "見せる",
+        "振り乱し": "振り乱す", "考え": "考える", "わからん": "わかる",
     }
     ok = 0
     for surface, expect in tests.items():
@@ -229,5 +129,5 @@ if __name__ == "__main__":
         found = [c for c in cands if in_dict(c)]
         hit = expect in found
         ok += hit
-        print(f"{'OK ' if hit else 'MISS'} {surface:10s} -> expect {expect:6s} | dict-hits: {found}")
+        print(f"{'OK ' if hit else 'MISS'} {surface:10s} -> expect {expect:6s} | dict-hits: {found[:8]}")
     print(f"\n{ok}/{len(tests)} resolved")

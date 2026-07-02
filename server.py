@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import ctypes
+import functools
 import json
 import os
 import queue
@@ -20,6 +21,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,6 +117,22 @@ class Broadcaster:
 broadcaster = Broadcaster()
 
 
+def clean_hook_text(text):
+    """Undo the two classic Textractor artifacts: the whole line emitted twice
+    back-to-back (ABCABC), and every character doubled (ああねね). The artifacts
+    affect whole hooked sentences, so short texts are left alone — otherwise real
+    reduplicated words the user copies by hand (ばらばら, はいはい) would be halved."""
+    n = len(text)
+    if n >= 10 and n % 2 == 0:
+        h = n // 2
+        if text[:h] == text[h:]:
+            text = text[:h]
+            n = h
+    if n >= 8 and n % 2 == 0 and all(text[i] == text[i + 1] for i in range(0, n, 2)):
+        text = text[::2]
+    return text
+
+
 def clipboard_monitor(paused_flag):
     last_seq = None
     last_text = None
@@ -127,6 +145,8 @@ def clipboard_monitor(paused_flag):
             if seq != last_seq:
                 last_seq = seq
                 text = get_clipboard_text()
+                if text:
+                    text = clean_hook_text(text)
                 if text and text != last_text:
                     last_text = text
                     broadcaster.publish(text)
@@ -197,42 +217,6 @@ _KANA_PREF = {
     "いる": "居る", "くる": "来る", "できる": "出来る",
     "ある": "有る", "なる": "成る", "みる": "見る",
 }
-
-
-def _fetch_entries(term):
-    """All JMdict entries whose kanji/kana exactly equals `term` (kana fallback)."""
-    db = get_db()
-    out, seen = [], set()
-    cands = [term]
-    h = to_hiragana(term)
-    if h != term:
-        cands.append(h)
-    for cand in cands:
-        # LIMIT must exceed the largest homograph cluster (こう has 51) so a common
-        # word with poor frequency attribution (斯う「こう」, stored freq 1) is never
-        # truncated away — otherwise hovering it would surface only rarer homographs.
-        rows = db.execute(
-            "SELECT DISTINCT e.id, e.json FROM terms t JOIN entries e ON e.id = t.id "
-            "WHERE t.term = ? ORDER BY e.freq DESC LIMIT 80", (cand,)).fetchall()
-        for eid, js in rows:
-            if eid not in seen:
-                seen.add(eid)
-                out.append(json.loads(js))
-        if out:
-            break
-    return out
-
-
-def _fetch_names(term):
-    """JMnedict name entries (empty if the names table hasn't been built)."""
-    db = get_db()
-    try:
-        rows = db.execute(
-            "SELECT DISTINCT n.id, n.json FROM nameterms t JOIN names n ON n.id = t.id "
-            "WHERE t.term = ? ORDER BY n.id LIMIT 8", (term,)).fetchall()
-    except sqlite3.OperationalError:
-        return []
-    return [json.loads(js) for _id, js in rows]
 
 
 def _fetch_entries_batch(terms):
@@ -353,6 +337,11 @@ def _sort_key(c, tok_len, pos, reading_h, pref):
     # only on a secondary reading it must not out-rank the word for which this reading is
     # primary (追う「おう」 over 合う「あう・おう」, whose frequency is really あう's).
     primary_read_ok = bool(reading_h and e.get("r") and to_hiragana(e["r"][0]) == reading_h)
+    # ...and the sharper per-element signal: JMdict marks priority on each *specific*
+    # reading (口 is common as くち but not as こう), so a word whose matched reading
+    # carries the priority tag beats one that only matches on an obscure reading.
+    read_pri_ok = bool(reading_h and
+                       any(to_hiragana(r) == reading_h for r in e.get("rc", [])))
     pref_ok = bool(pref and pref in e.get("k", []))
 
     # Cap a rare word that matches *past* the tokenizer's segment: it is almost
@@ -370,11 +359,12 @@ def _sort_key(c, tok_len, pos, reading_h, pref):
         0 if pos_ok else 1,                # 4. part-of-speech agreement (其処 pronoun > 底 noun)
         0 if read_ok else 1,               # 5. reading agreement (any reading)
         0 if primary_read_ok else 1,       # 6. the hovered reading is the entry's primary one
-        0 if pref_ok else 1,               # 7. known dominant kanji for a kana verb (居る > 射る)
-        len(c["reasons"]),                 # 8. fewer de-inflection steps (exact > inflected)
-        -common_lvl, -common_mag,          # 9. more common (JMdict-common tier > raw VN rank)
-        -c["len"],                         # 10. true length
-        e.get("id", ""),                   # 11. stable final tiebreak -> deterministic order
+        0 if read_pri_ok else 1,           # 7. the matched reading carries JMdict priority
+        0 if pref_ok else 1,               # 8. known dominant kanji for a kana verb (居る > 射る)
+        len(c["reasons"]),                 # 9. fewer de-inflection steps (exact > inflected)
+        -common_lvl, -common_mag,          # 10. more common (JMdict-common tier > raw VN rank)
+        -c["len"],                         # 11. true length
+        e.get("id", ""),                   # 12. stable final tiebreak -> deterministic order
     )
 
 
@@ -385,11 +375,46 @@ def lookup(term, pos=None, reading=None):
     reading_h = to_hiragana(reading) if reading else None
     pref = _KANA_PREF.get(term) or _KANA_PREF.get(to_hiragana(term))
     cands = [{"len": len(term), "reasons": [], "kind": "word", "entry": e}
-             for e in _fetch_entries(term)]
+             for e in _fetch_entries_batch([term]).get(term, [])]
     cands.sort(key=lambda c: _sort_key(c, len(term), pos, reading_h, pref))
     return [c["entry"] for c in cands]
 
 
+def _attach_pitch(cands):
+    """Add Kanjium accent numbers to the top candidates (no-op without the table).
+    Matched per (headword, reading) pair so homographs get the right accent."""
+    if not cands:
+        return
+    db = get_db()
+    heads = {}
+    for c in cands:
+        e = c["entry"]
+        head = (e.get("k") or e.get("r") or [None])[0]
+        if head:
+            heads.setdefault(head, []).append(c)
+    try:
+        placeholders = ",".join("?" * len(heads))
+        rows = db.execute(
+            f"SELECT term, reading, accent FROM pitch WHERE term IN ({placeholders})",
+            tuple(heads)).fetchall()
+    except sqlite3.OperationalError:
+        return
+    by_term = {}
+    for term, reading, accent in rows:
+        by_term.setdefault(term, {})[to_hiragana(reading)] = accent
+    for head, group in heads.items():
+        readings = by_term.get(head)
+        if not readings:
+            continue
+        for c in group:
+            e = c["entry"]
+            shown = c.get("mr") or (e.get("r") or [head])[0]
+            acc = readings.get(to_hiragana(shown))
+            if acc is not None:
+                c["pitch"] = acc
+
+
+@functools.lru_cache(maxsize=4096)
 def scan(text, pos=None, reading=None, base=None, surface=None):
     """Longest-match scan from the start of `text`, returning ranked candidates
     (words via de-inflection + names). `surface` is the tokenizer's surface form of
@@ -455,7 +480,9 @@ def scan(text, pos=None, reading=None, base=None, surface=None):
                         break
 
     cands.sort(key=lambda c: _sort_key(c, tok_len, pos, reading_h, pref))
-    return cands[:12]
+    cands = cands[:12]
+    _attach_pitch(cands)
+    return cands
 
 
 # --------------------------------------------------------------------------- #
@@ -495,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_file(self, rel_path):
         # Prevent path traversal.
         full = os.path.normpath(os.path.join(BASE_DIR, rel_path.lstrip("/")))
-        if not full.startswith(BASE_DIR) or not os.path.isfile(full):
+        if not full.startswith(BASE_DIR + os.sep) or not os.path.isfile(full):
             self._send_bytes(b"Not found", "text/plain; charset=utf-8", 404)
             return
         ext = os.path.splitext(full)[1].lower()
@@ -542,7 +569,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/pause":
+        if parsed.path == "/anki":
+            # Proxy to AnkiConnect: the browser page can't call it directly
+            # (AnkiConnect's CORS allowlist doesn't include this origin by default).
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                req = urllib.request.Request(
+                    "http://127.0.0.1:8765", data=raw,
+                    headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    self._send_bytes(resp.read(), "application/json; charset=utf-8")
+            except Exception:
+                self._send_json(
+                    {"result": None,
+                     "error": "AnkiConnect unreachable — is Anki running with the AnkiConnect add-on?"},
+                    502)
+        elif parsed.path == "/pause":
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             try:

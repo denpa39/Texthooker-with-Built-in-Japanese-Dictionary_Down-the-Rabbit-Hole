@@ -43,6 +43,9 @@ JMDICT_RELEASES_API = "https://api.github.com/repos/scriptin/jmdict-simplified/r
 # Auto-downloaded as the VN-flavored default when no --freq is given.
 INNOCENT_URL = ("https://raw.githubusercontent.com/MarvNC/yomitan-dictionaries/"
                 "master/japanese/freq/innocent_corpus/innocent_corpus.zip")
+# Kanjium pitch-accent data (term \t reading \t accent), CC BY-SA 4.0.
+KANJIUM_URL = ("https://raw.githubusercontent.com/mifunetoshiro/kanjium/"
+               "master/data/source_files/raw/accents.txt")
 UA = {"User-Agent": "texthooker-setup/1.0"}
 
 
@@ -78,7 +81,7 @@ def fetch_bytes(url, headers=None):
 
 # --------------------------------------------------------------------------- #
 def setup_kuromoji(force=False):
-    print("[1/3] kuromoji tokenizer")
+    print("[1/4] kuromoji tokenizer")
     js_path = os.path.join(KUROMOJI_DIR, "kuromoji.js")
     if force or not os.path.isfile(js_path):
         download(f"{KUROMOJI_CDN}/build/kuromoji.js", js_path)
@@ -279,8 +282,11 @@ def build_db(jmdict_json_bytes, vn_freq=None):
     for w in words:
         kanji = [k["text"] for k in w.get("kanji", [])]
         kana = [k["text"] for k in w.get("kana", [])]
-        common = any(k.get("common") for k in w.get("kanji", [])) or \
-                 any(k.get("common") for k in w.get("kana", []))
+        # Per-element JMdict priority: which specific spellings/readings are common,
+        # not just the entry as a whole (口 is common as くち, rare as こう).
+        kanji_common = [k["text"] for k in w.get("kanji", []) if k.get("common")]
+        kana_common = [k["text"] for k in w.get("kana", []) if k.get("common")]
+        common = bool(kanji_common or kana_common)
         freq = _entry_freq(kanji, kana, common, wf)
         dfreq = _display_freq(kanji, kana, common, wf)
         senses = []
@@ -299,6 +305,10 @@ def build_db(jmdict_json_bytes, vn_freq=None):
         eid = int(w["id"])
         rec = {"id": w["id"], "k": kanji, "r": kana, "c": common, "f": freq,
                "df": dfreq, "s": senses}
+        if kana_common:
+            rec["rc"] = kana_common     # readings JMdict marks common
+        if kanji_common:
+            rec["kc"] = kanji_common    # spellings JMdict marks common
         if vn_freq is not None:
             kr = [vn_freq[t] for t in kanji if t in vn_freq] or \
                  [vn_freq[t] for t in kana if t in vn_freq]
@@ -334,7 +344,7 @@ def build_db(jmdict_json_bytes, vn_freq=None):
 
 
 def setup_dictionary(common, force=False, freq_zip=None, innocent=False):
-    print("[2/3] JMdict dictionary + frequency")
+    print("[2/4] JMdict dictionary + frequency")
     if not force and os.path.isfile(DB_PATH):
         print("  dict.sqlite already present (use --force to rebuild)\n")
         return
@@ -418,8 +428,50 @@ def build_names(js_bytes):
     print("  names ready\n")
 
 
+def setup_pitch(force=False):
+    """Kanjium pitch-accent table: pitch(term, reading, accent). Optional —
+    lookups work without it; the popup just shows no accent numbers."""
+    print("[4/4] pitch accent (Kanjium)")
+    if not os.path.isfile(DB_PATH):
+        print("  build the dictionary first.\n")
+        return
+    con = sqlite3.connect(DB_PATH)
+    if not force:
+        has = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pitch'").fetchone()
+        if has:
+            con.close()
+            print("  pitch accents already present (use --force to rebuild)\n")
+            return
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "accents.txt")
+            download(KANJIUM_URL, path)
+            rows = []
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) != 3 or not parts[2]:
+                        continue
+                    term, reading, accent = parts
+                    rows.append((term, reading or term, accent))
+        cur = con.cursor()
+        cur.execute("PRAGMA journal_mode = OFF")
+        cur.execute("PRAGMA synchronous = OFF")
+        cur.execute("DROP TABLE IF EXISTS pitch")
+        cur.execute("CREATE TABLE pitch (term TEXT, reading TEXT, accent TEXT)")
+        cur.executemany("INSERT INTO pitch VALUES (?,?,?)", rows)
+        cur.execute("CREATE INDEX idx_pitch ON pitch(term)")
+        con.commit()
+        print(f"  {len(rows):,} pitch entries ready\n")
+    except Exception as e:
+        print(f"  pitch accent unavailable ({e}) — skipping (lookups still work)\n")
+    finally:
+        con.close()
+
+
 def setup_names(force=False):
-    print("[3/3] JMnedict names")
+    print("[3/4] JMnedict names")
     if not os.path.isfile(DB_PATH):
         print("  build the dictionary first.\n")
         return
@@ -467,6 +519,7 @@ def main():
                      innocent=args.innocent)
     if not args.no_names:
         setup_names(force=args.force)
+    setup_pitch(force=args.force)
     print("Done!  Start the app with:  python server.py")
 
 
